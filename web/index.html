@@ -9,62 +9,69 @@
 <body>
     <div class="container">
         <header>
-            <h1>swiftshare</h1>
+            <h1>⚡ swiftshare</h1>
             <p class="subtitle">Transferencia P2P en red local</p>
+            <div class="device-alias" id="alias">Cargando...</div>
         </header>
 
         <main>
             <!-- Peer Discovery -->
             <section class="card">
-                <h2>Dispositivos en tu red</h2>
+                <h2>
+                    <span class="icon">📡</span> Dispositivos
+                    <span class="status-badge searching" id="search-badge">Buscando</span>
+                </h2>
                 <div id="peer-list" class="peer-list">
-                    <div class="empty-state">Buscando dispositivos...</div>
+                    <div class="empty-state">
+                        Buscando dispositivos en la red...
+                        <div class="hint">Abre swiftshare en otro dispositivo en la misma red</div>
+                    </div>
                 </div>
                 <div class="manual-connect">
-                    <input type="text" id="manual-ip" placeholder="IP del dispositivo">
-                    <input type="number" id="manual-port" placeholder="Puerto" value="45678">
-                    <button id="connect-btn">Conectar</button>
+                    <input type="text" id="manual-ip" placeholder="IP del dispositivo (ej: 192.168.1.100)">
+                    <button id="connect-btn" class="btn btn-primary">Conectar</button>
                 </div>
             </section>
 
             <!-- Send Files -->
             <section class="card">
-                <h2>Enviar archivos</h2>
+                <h2><span class="icon">📤</span> Enviar archivos</h2>
                 <div id="drop-zone" class="drop-zone">
                     <div class="drop-zone-content">
-                        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775a5.25 5.25 0 0110.233-2.338C12.29 12.795 12 16.125 12 19.5"/>
                         </svg>
-                        <p>Arrastra archivos o carpetas aquí</p>
+                        <p>Arrastra archivos aquí</p>
                         <p class="or-text">o</p>
-                        <button id="browse-btn">Seleccionar archivos</button>
+                        <button id="browse-btn" class="btn btn-secondary">Seleccionar archivos</button>
                         <input type="file" id="file-input" multiple hidden>
-                        <input type="file" id="folder-input" webkitdirectory multiple hidden>
                     </div>
                 </div>
                 <div id="file-preview" class="file-preview hidden">
-                    <h3>Archivos seleccionados</h3>
+                    <h3 id="file-count"></h3>
                     <ul id="file-list"></ul>
                     <div class="file-actions">
-                        <button id="send-btn" class="btn-primary">Enviar</button>
-                        <button id="cancel-btn" class="btn-secondary">Cancelar</button>
+                        <button id="send-btn" class="btn btn-primary" disabled>Enviar</button>
+                        <button id="cancel-btn" class="btn btn-secondary">Cancelar</button>
                     </div>
                 </div>
             </section>
 
             <!-- Active Transfers -->
             <section class="card">
-                <h2>Transferencias activas</h2>
+                <h2><span class="icon">🔄</span> Transferencias</h2>
                 <div id="transfer-list" class="transfer-list">
-                    <div class="empty-state">No hay transferencias activas</div>
+                    <div class="empty-state">Sin transferencias activas</div>
                 </div>
             </section>
         </main>
 
         <footer>
-            <p>swiftshare v0.1.0</p>
+            swiftshare v0.1.0
         </footer>
     </div>
+
+    <div class="toast-container" id="toast-container"></div>
 
     <script src="/app.js"></script>
 </body>

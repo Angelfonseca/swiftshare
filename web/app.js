@@ -1,35 +1,47 @@
-// swiftshare - Web UI JavaScript
+// swiftshare - Web UI
 
 const API_BASE = window.location.origin;
 let selectedFiles = [];
+let selectedPeer = null;
 let ws = null;
 
 // DOM elements
 const dropZone = document.getElementById("drop-zone");
 const browseBtn = document.getElementById("browse-btn");
 const fileInput = document.getElementById("file-input");
-const folderInput = document.getElementById("folder-input");
 const filePreview = document.getElementById("file-preview");
 const fileList = document.getElementById("file-list");
+const fileCount = document.getElementById("file-count");
 const sendBtn = document.getElementById("send-btn");
 const cancelBtn = document.getElementById("cancel-btn");
 const peerList = document.getElementById("peer-list");
 const manualIp = document.getElementById("manual-ip");
-const manualPort = document.getElementById("manual-port");
 const connectBtn = document.getElementById("connect-btn");
 const transferList = document.getElementById("transfer-list");
+const searchBadge = document.getElementById("search-badge");
+const aliasEl = document.getElementById("alias");
 
 // Initialize
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
     setupDragAndDrop();
     setupBrowseButtons();
     setupConnectButton();
     setupSendButton();
     setupCancelButton();
     setupWebSocket();
-    refreshPeers();
-    refreshTransfers();
+    await refreshPeers();
+    await refreshTransfers();
 });
+
+// Toast notifications
+function showToast(message, type = "info") {
+    const container = document.getElementById("toast-container");
+    const toast = document.createElement("div");
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+}
 
 // WebSocket for real-time progress
 function setupWebSocket() {
@@ -45,35 +57,29 @@ function setupWebSocket() {
         }
     };
 
-    ws.onerror = () => {
-        console.error("WebSocket error");
-    };
-
+    ws.onerror = () => console.error("WebSocket error");
     ws.onclose = () => {
-        console.log("WebSocket disconnected, reconnecting...");
         setTimeout(setupWebSocket, 2000);
     };
 }
 
 // Drag and drop
 function setupDragAndDrop() {
-    ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
-        dropZone.addEventListener(eventName, preventDefaults, false);
+    ["dragenter", "dragover", "dragleave", "drop"].forEach((name) => {
+        dropZone.addEventListener(name, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        });
     });
 
-    function preventDefaults(e) {
-        e.preventDefault();
-        e.stopPropagation();
-    }
-
-    ["dragenter", "dragover"].forEach((eventName) => {
-        dropZone.addEventListener(eventName, () => {
+    ["dragenter", "dragover"].forEach((name) => {
+        dropZone.addEventListener(name, () => {
             dropZone.classList.add("drag-over");
         });
     });
 
-    ["dragleave", "drop"].forEach((eventName) => {
-        dropZone.addEventListener(eventName, () => {
+    ["dragleave", "drop"].forEach((name) => {
+        dropZone.addEventListener(name, () => {
             dropZone.classList.remove("drag-over");
         });
     });
@@ -81,9 +87,9 @@ function setupDragAndDrop() {
     dropZone.addEventListener("drop", handleDrop);
 }
 
-function handleDrop(e) {
+async function handleDrop(e) {
     const items = e.dataTransfer.items;
-    collectFilesFromItems(items, (files) => {
+    await collectFilesFromItems(items, (files) => {
         selectedFiles = files;
         showFilePreview(files);
     });
@@ -119,21 +125,8 @@ async function collectEntry(entry, files) {
 
 // Browse buttons
 function setupBrowseButtons() {
-    browseBtn.addEventListener("click", () => {
-        // Toggle between file and folder input
-        if (fileInput.files.length > 0) {
-            folderInput.click();
-        } else {
-            fileInput.click();
-        }
-    });
-
+    browseBtn.addEventListener("click", () => fileInput.click());
     fileInput.addEventListener("change", (e) => {
-        selectedFiles = Array.from(e.target.files);
-        showFilePreview(selectedFiles);
-    });
-
-    folderInput.addEventListener("change", (e) => {
         selectedFiles = Array.from(e.target.files);
         showFilePreview(selectedFiles);
     });
@@ -154,9 +147,9 @@ function showFilePreview(files) {
         fileList.appendChild(li);
     });
 
-    filePreview.querySelector("h3").textContent =
-        `${files.length} archivo(s) - ${formatSize(totalSize)}`;
+    fileCount.textContent = `${files.length} archivo(s) · ${formatSize(totalSize)}`;
     filePreview.classList.remove("hidden");
+    updateSendButton();
 }
 
 // Connect to manual IP
@@ -165,66 +158,130 @@ function setupConnectButton() {
         const ip = manualIp.value.trim();
 
         if (!ip) {
-            alert("Ingresa una IP válida (ej: 192.168.1.100)");
+            showToast("Ingresa una IP válida", "error");
             return;
         }
 
         const ipRegex = /^\d{1,3}(\.\d{1,3}){3}$/;
         if (!ipRegex.test(ip)) {
-            alert("El formato de IP debe ser: xxx.xxx.xxx.xxx");
+            showToast("Formato IP inválido (ej: 192.168.1.100)", "error");
             return;
         }
 
         connectBtn.disabled = true;
         connectBtn.textContent = "Buscando...";
-        document.getElementById("manual-ip").disabled = true;
-        document.getElementById("manual-port").disabled = true;
+        manualIp.disabled = true;
 
         try {
             const response = await fetch(`${API_BASE}/api/peers/connect`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ip, tcp_port: 45678 }),
+                body: JSON.stringify({ ip, tcp_port: 45679 }),
             });
 
             const data = await response.json();
 
             if (response.ok) {
-                console.log("Probe sent to", ip, "-", data.message || "");
-                connectBtn.textContent = "Esperando respuesta...";
+                showToast(`Probe enviado a ${ip}`, "info");
 
-                // Poll for peers 3 times with 2s delay
-                for (let i = 0; i < 3; i++) {
-                    await new Promise(r => setTimeout(r, 2000));
+                // Poll for peers
+                for (let i = 0; i < 4; i++) {
+                    await sleep(1500);
                     await refreshPeers();
                     const peers = await getPeers();
                     if (peers.length > 0) {
+                        showToast(`¡Dispositivo encontrado!`, "success");
                         connectBtn.textContent = "¡Encontrado!";
-                        connectBtn.style.background = "#22c55e";
+                        connectBtn.style.background = "var(--success)";
                         break;
                     }
                 }
-
-                connectBtn.disabled = false;
-                connectBtn.textContent = "Conectar";
-                connectBtn.style.background = "";
-                document.getElementById("manual-ip").disabled = false;
-                document.getElementById("manual-port").disabled = false;
             } else {
-                alert("Error: " + (data.error || "No se pudo conectar"));
-                connectBtn.disabled = false;
-                connectBtn.textContent = "Conectar";
-                document.getElementById("manual-ip").disabled = false;
-                document.getElementById("manual-port").disabled = false;
+                showToast(data.error || "Error al conectar", "error");
             }
         } catch (e) {
-            alert("Error de conexión: " + e.message);
+            showToast("Error de red: " + e.message, "error");
+        } finally {
             connectBtn.disabled = false;
             connectBtn.textContent = "Conectar";
-            document.getElementById("manual-ip").disabled = false;
-            document.getElementById("manual-port").disabled = false;
+            connectBtn.style.background = "";
+            manualIp.disabled = false;
         }
     });
+
+    // Enter key
+    manualIp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") connectBtn.click();
+    });
+}
+
+// Send button
+function setupSendButton() {
+    sendBtn.addEventListener("click", async () => {
+        if (selectedFiles.length === 0) return;
+        if (!selectedPeer) {
+            showToast("Selecciona un dispositivo para enviar", "error");
+            return;
+        }
+
+        sendBtn.disabled = true;
+        sendBtn.textContent = `Enviando ${selectedFiles.length} archivo(s)...`;
+
+        try {
+            const formData = new FormData();
+            for (const file of selectedFiles) {
+                formData.append("files", file, file.name);
+                addTransferItem(file.name, selectedPeer.alias, "sending");
+            }
+
+            const response = await fetch(`${API_BASE}/api/send`, {
+                method: "POST",
+                body: formData,
+            });
+
+            const result = await response.json();
+
+            if (result.status === "saved") {
+                selectedFiles.forEach((file) => {
+                    updateTransferStatus(file.name, "sending", 100, "Completado ✓");
+                });
+                showToast(`${selectedFiles.length} archivo(s) enviados`, "success");
+            } else {
+                showToast("Error al guardar archivos", "error");
+            }
+        } catch (e) {
+            showToast("Error de red: " + e.message, "error");
+        } finally {
+            sendBtn.disabled = false;
+            sendBtn.textContent = "Enviar";
+        }
+    });
+}
+
+function setupCancelButton() {
+    cancelBtn.addEventListener("click", () => {
+        selectedFiles = [];
+        filePreview.classList.add("hidden");
+        fileList.innerHTML = "";
+        fileInput.value = "";
+        updateSendButton();
+    });
+}
+
+function updateSendButton() {
+    sendBtn.disabled = !selectedPeer || selectedFiles.length === 0;
+}
+
+// Refresh peers list
+async function refreshPeers() {
+    try {
+        const response = await fetch(`${API_BASE}/api/peers`);
+        if (!response.ok) return;
+        const peers = await response.json();
+        renderPeers(peers);
+    } catch (e) {
+        console.error("Failed to refresh peers:", e);
+    }
 }
 
 async function getPeers() {
@@ -237,128 +294,44 @@ async function getPeers() {
     }
 }
 
-// Send button
-function setupSendButton() {
-    sendBtn.addEventListener("click", async () => {
-        if (selectedFiles.length === 0) return;
-
-        const peerItems = peerList.querySelectorAll(".peer-item");
-        if (peerItems.length === 0) {
-            alert("No hay dispositivos disponibles. Asegúrate de que ambos dispositivos estén en la misma red.");
-            return;
-        }
-
-        const targetPeer = peerItems[0];
-        const peerData = JSON.parse(targetPeer.dataset.peerInfo || "{}");
-
-        if (!peerData.tcpHost) {
-            alert("No se pudo obtener la dirección IP del dispositivo destino.");
-            return;
-        }
-
-        sendBtn.disabled = true;
-        sendBtn.textContent = `Enviando ${selectedFiles.length} archivo(s)...`;
-
-        try {
-            const formData = new FormData();
-            for (const file of selectedFiles) {
-                formData.append("files", file, file.name);
-                addTransferItem(file.name, peerData.alias, "sending");
-            }
-
-            const response = await fetch(`${API_BASE}/api/send`, {
-                method: "POST",
-                body: formData,
-            });
-
-            const result = await response.json();
-
-            if (result.status === "saved") {
-                selectedFiles.forEach((file, i) => {
-                    updateTransferStatus(file.name, "sending", 100, "Completado");
-                });
-            } else {
-                selectedFiles.forEach((file) => {
-                    updateTransferStatus(file.name, "failed", 0, "Error al guardar");
-                });
-            }
-        } catch (e) {
-            console.error("Send error:", e);
-            selectedFiles.forEach((file) => {
-                updateTransferStatus(file.name, "failed", 0, "Error de red");
-            });
-        } finally {
-            sendBtn.disabled = false;
-            sendBtn.textContent = "Enviar";
-        }
-    });
-}
-
-function updateTransferStatus(fileName, status, percent, detail) {
-    const items = transferList.querySelectorAll(".transfer-item");
-    items.forEach((item) => {
-        const fileEl = item.querySelector(".transfer-file");
-        if (fileEl && fileEl.textContent === fileName) {
-            const fill = item.querySelector(".progress-fill");
-            const percentEl = item.querySelector(".transfer-percent");
-            const statusEl = item.querySelector(".transfer-status");
-            if (fill) fill.style.width = `${percent}%`;
-            if (percentEl) percentEl.textContent = `${percent}%`;
-            if (statusEl) {
-                statusEl.className = `transfer-status status-${status}`;
-                statusEl.textContent = detail || status;
-            }
-        }
-    });
-}
-
-// Cancel button
-function setupCancelButton() {
-    cancelBtn.addEventListener("click", () => {
-        selectedFiles = [];
-        filePreview.classList.add("hidden");
-        fileList.innerHTML = "";
-        fileInput.value = "";
-        folderInput.value = "";
-    });
-}
-
-// Refresh peers list
-async function refreshPeers() {
-    try {
-        const response = await fetch(`${API_BASE}/api/peers`);
-        if (!response.ok) return;
-
-        const peers = await response.json();
-        renderPeers(peers);
-    } catch (e) {
-        console.error("Failed to refresh peers:", e);
-    }
-}
-
 function renderPeers(peers) {
     if (peers.length === 0) {
-        peerList.innerHTML = '<div class="empty-state">No se encontraron dispositivos</div>';
+        peerList.innerHTML = `
+            <div class="empty-state">
+                No se encontraron dispositivos
+                <div class="hint">Asegúrate de que ambos dispositivos estén en la misma red</div>
+            </div>
+        `;
+        searchBadge.textContent = "Sin dispositivos";
+        searchBadge.classList.remove("searching");
+        searchBadge.classList.add("online");
+        searchBadge.style.background = "rgba(239, 68, 68, 0.2)";
+        searchBadge.style.color = "var(--error)";
         return;
     }
+
+    searchBadge.textContent = `${peers.length} dispositivo(s)`;
+    searchBadge.classList.remove("searching");
+    searchBadge.style.background = "rgba(34, 197, 94, 0.2)";
+    searchBadge.style.color = "var(--success)";
 
     peerList.innerHTML = "";
     peers.forEach((peer) => {
         const div = document.createElement("div");
-        div.className = "peer-item";
-        div.dataset.peer = peer.alias;
-        div.dataset.peerInfo = JSON.stringify({
-            alias: peer.alias,
-            tcpPort: peer.tcp_port,
-            tcpHost: "127.0.0.1",
-        });
+        div.className = "peer-item" + (selectedPeer?.fingerprint === peer.fingerprint ? " selected" : "");
         div.innerHTML = `
             <div class="peer-info">
                 <div class="peer-status"></div>
                 <span class="peer-name">${peer.alias}</span>
             </div>
-            <span class="peer-details">Puerto TCP: ${peer.tcp_port}</span>
+            <span class="peer-details">TCP: ${peer.tcp_port}</span>
         `;
+        div.addEventListener("click", () => {
+            selectedPeer = peer;
+            renderPeers(peers);
+            updateSendButton();
+            showToast(`Seleccionado: ${peer.alias}`, "info");
+        });
         peerList.appendChild(div);
     });
 }
@@ -368,7 +341,6 @@ async function refreshTransfers() {
     try {
         const response = await fetch(`${API_BASE}/api/transfers`);
         if (!response.ok) return;
-
         const transfers = await response.json();
         renderTransfers(transfers);
     } catch (e) {
@@ -378,34 +350,21 @@ async function refreshTransfers() {
 
 function renderTransfers(transfers) {
     if (transfers.length === 0) {
-        transferList.innerHTML =
-            '<div class="empty-state">No hay transferencias activas</div>';
+        transferList.innerHTML = '<div class="empty-state">Sin transferencias activas</div>';
         return;
     }
 
     transferList.innerHTML = "";
     transfers.forEach((transfer) => {
         transfer.forEach((file) => {
-            addTransferItem(
-                file.name,
-                transfer.peer_alias,
-                "sending",
-                transfer.session_id
-            );
+            addTransferItem(file.name, transfer.peer_alias, "sending");
         });
     });
 }
 
-function addTransferItem(fileName, peer, status, sessionId) {
-    // Remove existing item for same session
-    const existing = transferList.querySelector(`[data-session="${sessionId}"]`);
-    if (existing) {
-        existing.remove();
-    }
-
+function addTransferItem(fileName, peer, status) {
     const div = document.createElement("div");
     div.className = "transfer-item";
-    div.dataset.session = sessionId;
     div.innerHTML = `
         <div class="transfer-header">
             <span class="transfer-file">${fileName}</span>
@@ -423,37 +382,56 @@ function addTransferItem(fileName, peer, status, sessionId) {
 }
 
 function updateProgress(data) {
-    const percent = data.total > 0 ? ((data.bytes / data.total) * 100).toFixed(1) : 0;
-    const speed = calculateSpeed(data);
+    const percent = data.total > 0 ? ((data.bytes / data.total) * 100).toFixed(0) : 0;
+    const speed = formatSpeed(data.bytes);
 
-    // Find matching transfer item
     const items = transferList.querySelectorAll(".transfer-item");
     items.forEach((item) => {
         const fill = item.querySelector(".progress-fill");
         const percentEl = item.querySelector(".transfer-percent");
-        if (fill && percentEl) {
-            fill.style.width = `${percent}%`;
-            percentEl.textContent = `${percent}% - ${speed}`;
-        }
+        if (fill) fill.style.width = `${percent}%`;
+        if (percentEl) percentEl.textContent = `${percent}% · ${speed}`;
     });
 
-    // Auto-refresh peers when progress updates
-    refreshPeers();
+    if (parseInt(percent) === 100) {
+        showToast("Transferencia completada", "success");
+    }
 }
 
-function calculateSpeed(data) {
-    // Simple speed calculation (would need timestamp tracking for real speed)
-    const remaining = data.total > data.bytes ? ((data.total - data.bytes) / (data.total || 1)) * 5 : 0;
-    return remaining > 0 ? `${remaining.toFixed(1)}s restantes` : "Completado";
+function formatSpeed(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return (bytes / 1024).toFixed(0) + " KB";
+    return (bytes / 1048576).toFixed(1) + " MB";
 }
 
-// Utility: format file size
+function updateTransferStatus(fileName, status, percent, detail) {
+    const items = transferList.querySelectorAll(".transfer-item");
+    items.forEach((item) => {
+        const fileEl = item.querySelector(".transfer-file");
+        if (fileEl && fileEl.textContent === fileName) {
+            const fill = item.querySelector(".progress-fill");
+            const percentEl = item.querySelector(".transfer-percent");
+            const statusEl = item.querySelector(".transfer-status");
+            if (fill) fill.style.width = `${percent}%`;
+            if (percentEl) percentEl.textContent = detail || `${percent}%`;
+            if (statusEl) {
+                statusEl.className = `transfer-status status-${status}`;
+                statusEl.textContent = detail || status;
+            }
+        }
+    });
+}
+
 function formatSize(bytes) {
     if (bytes === 0) return "0 B";
     const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const sizes = ["B", "KB", "MB", "GB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Periodic refresh
