@@ -48,16 +48,24 @@ async fn main() -> anyhow::Result<()> {
         announce: false,
     };
 
-    let discovery = discovery::DiscoveryService::new(state.clone(), local_info).await?;
-    let discovery = Arc::new(discovery);
+    match discovery::DiscoveryService::new(state.clone(), local_info).await {
+        Ok(discovery) => {
+            let discovery = Arc::new(discovery);
 
-    // Start discovery tasks
-    let d = Arc::clone(&discovery);
-    tokio::spawn(async move { d.listen().await });
-    let d = Arc::clone(&discovery);
-    tokio::spawn(async move { d.periodic_announce().await });
-    let d = Arc::clone(&discovery);
-    tokio::spawn(async move { d.prune_stale_peers().await });
+            let d = Arc::clone(&discovery);
+            tokio::spawn(async move { d.listen().await });
+            let d = Arc::clone(&discovery);
+            tokio::spawn(async move { d.periodic_announce().await });
+            let d = Arc::clone(&discovery);
+            tokio::spawn(async move { d.prune_stale_peers().await });
+
+            tracing::info!("UDP discovery active on port {}", cli.udp_port);
+        }
+        Err(e) => {
+            tracing::warn!("UDP discovery not available (otros dispositivos no se verán automáticamente): {}", e);
+            tracing::warn!("Usa la conexión manual por IP en la UI web");
+        }
+    }
 
     // Start TCP transfer server
     let tcp_server = transfer::TransferServer::new(cli.tcp_port, state.clone()).await?;

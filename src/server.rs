@@ -1,7 +1,7 @@
 // Web UI server
 
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, State, WebSocketUpgrade},
+    extract::{DefaultBodyLimit, Multipart, Query, State, WebSocketUpgrade},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -10,6 +10,9 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{StreamExt, SinkExt};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tokio_util::codec::Framed;
+use crate::codec::TransferCodec;
+use crate::protocol::{TransferCommand, TransferFrame, FileMetadata};
 use crate::state::{AppState, PeerInfo, TransferState};
 
 pub async fn start_web_ui(state: Arc<AppState>, port: u16) -> anyhow::Result<()> {
@@ -112,99 +115,51 @@ async fn manual_connect(
 
 async fn send_file(
     State(state): State<Arc<AppState>>,
+    Query(params): Query<SendQueryParams>,
     mut multipart: Multipart,
 ) -> Json<serde_json::Value> {
+    let target_ip = params.target_ip.unwrap_or_default();
+    let target_tcp_port = params.target_tcp_port.unwrap_or(45678);
     let mut saved_files = Vec::new();
-    let mut target_ip = String::new();
-    let mut target_tcp_port = 45678u16;
+
+    if target_ip.is_empty() {
+        return Json(serde_json::json!({
+            "status": "error",
+            "error": "Selecciona un dispositivo antes de enviar"
+        }));
+    }
 
     loop {
         match multipart.next_field().await {
             Ok(Some(field)) => {
-                let name = field.name().unwrap_or("").to_string();
-
-                // extract target info from text fields
-                if name == "target_ip" {
-                    if let Ok(val) = field.text().await {
-                        target_ip = val.trim().to_string();
-                    }
-                    continue;
-                }
-                if name == "target_tcp_port" {
-                    if let Ok(val) = field.text().await {
-                        target_tcp_port = val.trim().parse().unwrap_or(45678);
-                    }
-                    continue;
-                }
-
-                if field.file_name().is_none() {
-                    continue;
-                }
+                if field.file_name().is_none() { continue; }
 
                 let file_name = field.file_name().unwrap_or("unknown").to_string();
                 let content_type = field.content_type().unwrap_or("application/octet-stream").to_string();
 
-                let temp_dir = state.download_dir.join("swiftshare-inbox");
-                tokio::fs::create_dir_all(&temp_dir).await.ok();
-                let temp_path = temp_dir.join(&file_name);
-                let partial_path = temp_dir.join(format!("{}.partial", file_name));
-
-                match tokio::fs::File::create(&partial_path).await {
-                    Ok(mut file) => {
-                        let mut stream = field;
-                        let mut total: u64 = 0;
-
-                        loop {
-                            match stream.chunk().await {
-                                Ok(Some(chunk)) => {
-                                    if let Err(e) = file.write_all(&chunk).await {
-                                        let _ = tokio::fs::remove_file(&partial_path).await;
-                                        return Json(serde_json::json!({"status": "error", "error": format!("Error de escritura: {}", e)}));
-                                    }
-                                    total += chunk.len() as u64;
-                                }
-                                Ok(None) => break,
-                                Err(e) => {
-                                    let _ = tokio::fs::remove_file(&partial_path).await;
-                                    return Json(serde_json::json!({"status": "error", "error": format!("Error de stream: {}", e)}));
-                                }
+                let target_addr = format!("{}:{}", target_ip, target_tcp_port);
+                match target_addr.parse::<std::net::SocketAddr>() {
+                    Ok(addr) => {
+                        match forward_stream_to_peer(field, &file_name, addr, state.clone()).await {
+                            Ok(size) => {
+                                saved_files.push(serde_json::json!({
+                                    "name": file_name,
+                                    "size": size,
+                                    "type": content_type
+                                }));
+                            }
+                            Err(e) => {
+                                return Json(serde_json::json!({
+                                    "status": "error",
+                                    "error": format!("Error al enviar al peer: {}", e)
+                                }));
                             }
                         }
-
-                        tokio::fs::rename(&partial_path, &temp_path).await.ok();
-                        tracing::info!("Saved locally: {} ({} bytes)", file_name, total);
-
-                        // Forward to target peer via TCP
-                        if !target_ip.is_empty() {
-                            let target_addr = format!("{}:{}", target_ip, target_tcp_port);
-                            if let Ok(addr) = target_addr.parse::<std::net::SocketAddr>() {
-                                tracing::info!("Forwarding {} to {}", file_name, target_addr);
-                                let sender = crate::transfer::FileSender::new(state.clone());
-                                match sender.send_file(&temp_path, addr).await {
-                                    Ok(_) => tracing::info!("Forwarded: {} to {}", file_name, target_addr),
-                                    Err(e) => {
-                                        tracing::error!("Failed to forward {}: {}", file_name, e);
-                                        return Json(serde_json::json!({
-                                            "status": "forward_error",
-                                            "error": format!("Archivo guardado localmente pero fallo el envio al peer: {}", e),
-                                            "file": file_name,
-                                            "size": total
-                                        }));
-                                    }
-                                }
-                            }
-                        }
-
-                        saved_files.push(serde_json::json!({
-                            "name": file_name,
-                            "size": total,
-                            "type": content_type
-                        }));
                     }
-                    Err(e) => {
+                    Err(_) => {
                         return Json(serde_json::json!({
                             "status": "error",
-                            "error": format!("No se pudo crear el archivo: {}", e)
+                            "error": format!("Dirección inválida: {}", target_addr)
                         }));
                     }
                 }
@@ -223,6 +178,62 @@ async fn send_file(
         "status": "saved",
         "files": saved_files
     }))
+}
+
+#[derive(serde::Deserialize)]
+struct SendQueryParams {
+    target_ip: Option<String>,
+    target_tcp_port: Option<u16>,
+}
+
+/// Save uploaded file to temp, forward to peer via TCP, then delete temp
+async fn forward_stream_to_peer(
+    mut field: axum::extract::multipart::Field<'_>,
+    file_name: &str,
+    target_addr: std::net::SocketAddr,
+    state: Arc<AppState>,
+) -> Result<u64, String> {
+    use tokio::io::AsyncWriteExt;
+
+    // Save to temp file first
+    let temp_dir = std::env::temp_dir().join("swiftshare");
+    tokio::fs::create_dir_all(&temp_dir).await
+        .map_err(|e| format!("Error creating temp dir: {}", e))?;
+
+    let temp_path = temp_dir.join(file_name);
+    let partial_path = temp_dir.join(format!("{}.partial", file_name));
+
+    let mut file = tokio::fs::File::create(&partial_path).await
+        .map_err(|e| format!("Error creating temp file: {}", e))?;
+
+    let mut total: u64 = 0;
+    loop {
+        match field.chunk().await {
+            Ok(Some(chunk)) => {
+                file.write_all(&chunk).await
+                    .map_err(|e| format!("Error writing temp file: {}", e))?;
+                total += chunk.len() as u64;
+            }
+            Ok(None) => break,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&partial_path).await;
+                return Err(format!("Error reading upload: {}", e));
+            }
+        }
+    }
+
+    file.flush().await.map_err(|e| format!("Error flushing: {}", e))?;
+    drop(file);
+    tokio::fs::rename(&partial_path, &temp_path).await
+        .map_err(|e| format!("Error renaming: {}", e))?;
+
+    // Forward via FileSender (handles token exchange correctly)
+    let sender = crate::transfer::FileSender::new(state);
+    sender.send_file(&temp_path, target_addr).await
+        .map_err(|e| format!("Error enviando al peer: {}", e))?;
+
+    let _ = tokio::fs::remove_file(&temp_path).await;
+    Ok(total)
 }
 
 async fn list_available_files(

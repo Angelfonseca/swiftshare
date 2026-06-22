@@ -237,14 +237,12 @@ function setupSendButton() {
 
                 const formData = new FormData();
                 formData.append("file", file, file.name);
-                formData.append("target_ip", selectedPeer.ip);
-                formData.append("target_tcp_port", selectedPeer.tcp_port.toString());
 
-                try {
-                    const response = await fetch(`${API_BASE}/api/send`, {
-                        method: "POST",
-                        body: formData,
-                    });
+                const url = `${API_BASE}/api/send?target_ip=${encodeURIComponent(selectedPeer.ip)}&target_tcp_port=${selectedPeer.tcp_port}`;
+                const response = await fetch(url, {
+                    method: "POST",
+                    body: formData,
+                });
 
                     if (!response.ok) {
                         const text = await response.text();
