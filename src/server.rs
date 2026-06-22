@@ -68,16 +68,45 @@ async fn manual_connect(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ManualConnectRequest>,
 ) -> Json<serde_json::Value> {
-    let addr = format!("{}:{}", payload.ip, payload.port);
-    let socket_addr: std::net::SocketAddr = match addr.parse() {
-        Ok(a) => a,
-        Err(_) => return Json(serde_json::json!({ "error": "Invalid address format" })),
-    };
+    let ip = payload.ip.trim().to_string();
+    let tcp_port = payload.tcp_port;
 
-    // Send UDP discovery to the target IP
-    match send_discovery_to(socket_addr).await {
-        Ok(_) => Json(serde_json::json!({ "status": "discovering" })),
-        Err(e) => Json(serde_json::json!({ "error": e.to_string() })),
+    // Validate IP
+    if !ip.contains('.') || ip.split('.').count() != 4 {
+        return Json(serde_json::json!({ "error": "Formato IP inválido. Usa: xxx.xxx.xxx.xxx" }));
+    }
+
+    // Try multiple discovery methods
+    let mut found = false;
+
+    // Method 1: Direct UDP to IP:45679
+    let direct_addr = format!("{}:{}", ip, 45679);
+    if let Ok(addr) = direct_addr.parse::<std::net::SocketAddr>() {
+        if let Err(e) = send_discovery_to(addr).await {
+            tracing::warn!("Direct discovery failed: {}", e);
+        } else {
+            found = true;
+        }
+    }
+
+    // Method 2: Broadcast to subnet 192.168.x.255
+    let parts: Vec<&str> = ip.split('.').collect();
+    if parts.len() == 4 {
+        let subnet = format!("{}.255:45679", parts[..3].join("."));
+        if let Ok(addr) = subnet.parse::<std::net::SocketAddr>() {
+            let _ = send_discovery_to(addr).await;
+        }
+    }
+
+    // Method 3: Broadcast to 255.255.255.255
+    if let Ok(addr) = "255.255.255.255:45679".parse::<std::net::SocketAddr>() {
+        let _ = send_discovery_to(addr).await;
+    }
+
+    if found {
+        Json(serde_json::json!({ "status": "success", "message": format!("Probing {}... Espera 3 segundos para que responda", ip) }))
+    } else {
+        Json(serde_json::json!({ "status": "probing", "message": format!("Enviando probe a {}... Espera 3 segundos", ip) }))
     }
 }
 
@@ -196,7 +225,7 @@ async fn send_discovery_to(addr: std::net::SocketAddr) -> anyhow::Result<()> {
 #[derive(serde::Deserialize)]
 struct ManualConnectRequest {
     ip: String,
-    port: u16,
+    tcp_port: u16,
 }
 
 #[cfg(test)]

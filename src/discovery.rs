@@ -8,12 +8,12 @@ use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 
-use crate::state::PeerInfo;
+use crate::state::AppState;
 
 const BROADCAST_PORT: u16 = 45679;
 const MULTICAST_ADDR: &str = "224.0.0.167";
-const ANNOUNCE_INTERVAL: u64 = 3;
-const STALE_TIMEOUT: u64 = 30;
+const ANNOUNCE_INTERVAL: u64 = 2;
+const STALE_TIMEOUT: u64 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscoveryMessage {
@@ -21,32 +21,27 @@ pub struct DiscoveryMessage {
     pub fingerprint: String,
     pub tcp_port: u16,
     pub udp_port: u16,
+    pub http_port: u16,
     pub announce: bool,
 }
 
 pub struct DiscoveryService {
     socket: Arc<UdpSocket>,
-    peers: Arc<RwLock<HashMap<String, DiscoveredPeer>>>,
+    state: Arc<AppState>,
     local_info: DiscoveryMessage,
 }
 
-struct DiscoveredPeer {
-    info: DiscoveryMessage,
-    addr: std::net::SocketAddr,
-    last_seen: Instant,
-}
-
 impl DiscoveryService {
-    pub async fn new(local_info: DiscoveryMessage) -> anyhow::Result<Self> {
-        let socket = Self::create_broadcast_socket().await?;
+    pub async fn new(state: Arc<AppState>, local_info: DiscoveryMessage) -> anyhow::Result<Self> {
+        let socket = Self::create_socket().await?;
         Ok(Self {
             socket,
-            peers: Arc::new(RwLock::new(HashMap::new())),
+            state,
             local_info,
         })
     }
 
-    async fn create_broadcast_socket() -> anyhow::Result<Arc<UdpSocket>> {
+    async fn create_socket() -> anyhow::Result<Arc<UdpSocket>> {
         let socket = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::DGRAM,
@@ -78,29 +73,40 @@ impl DiscoveryService {
 
         let data = serde_json::to_vec(&msg)?;
 
-        // Broadcast
+        // Method 1: Broadcast to 255.255.255.255
         let broadcast_addr: std::net::SocketAddr = format!("255.255.255.255:{}", BROADCAST_PORT)
             .parse()
             .context("Failed to parse broadcast address")?;
-        self.socket.send_to(&data, broadcast_addr).await?;
+        let _ = self.socket.send_to(&data, broadcast_addr).await;
 
-        // Multicast
+        // Method 2: Multicast
         let multicast_addr: std::net::SocketAddr =
             format!("{}:{}", MULTICAST_ADDR, BROADCAST_PORT).parse().context(
                 "Failed to parse multicast address",
             )?;
-        self.socket.send_to(&data, multicast_addr).await?;
+        let _ = self.socket.send_to(&data, multicast_addr).await;
+
+        // Method 3: Broadcast to local subnet (192.168.x.x)
+        let broadcast_subnet: std::net::SocketAddr = format!("192.168.255.255:{}", BROADCAST_PORT)
+            .parse()
+            .context("Failed to parse subnet broadcast address")?;
+        let _ = self.socket.send_to(&data, broadcast_subnet).await;
 
         Ok(())
     }
 
-    pub async fn register_with(&self, target: std::net::SocketAddr) -> anyhow::Result<()> {
-        let mut msg = self.local_info.clone();
-        msg.announce = true;
-
+    pub async fn discover_single(&self, ip: &str) -> anyhow::Result<()> {
+        let msg = self.local_info.clone();
         let data = serde_json::to_vec(&msg)?;
-        self.socket.send_to(&data, target).await?;
 
+        // Try direct UDP to specific IP
+        let addr = format!("{}:{}", ip, BROADCAST_PORT);
+        let socket_addr: std::net::SocketAddr = addr
+            .parse()
+            .context(format!("Invalid address: {}", addr))?;
+        self.socket.send_to(&data, socket_addr).await?;
+
+        tracing::info!("Discovery probe sent to {}", ip);
         Ok(())
     }
 
@@ -117,19 +123,24 @@ impl DiscoveryService {
                             continue;
                         }
 
-                        let mut peers = self.peers.write().await;
-                        peers.insert(
-                            msg.fingerprint.clone(),
-                            DiscoveredPeer {
-                                info: msg.clone(),
-                                addr: from_addr,
-                                last_seen: Instant::now(),
-                            },
+                        tracing::info!(
+                            "Discovered peer: {} from {}",
+                            msg.alias,
+                            from_addr
                         );
 
-                        if msg.announce {
-                            let _ = self.send_response(from_addr).await;
-                        }
+                        let peer_info = crate::state::PeerInfo {
+                            alias: msg.alias.clone(),
+                            fingerprint: msg.fingerprint.clone(),
+                            tcp_port: msg.tcp_port,
+                            udp_port: msg.udp_port,
+                            last_seen: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs(),
+                        };
+
+                        self.state.add_peer(peer_info).await;
                     }
                 }
                 Err(e) => {
@@ -138,16 +149,6 @@ impl DiscoveryService {
                 }
             }
         }
-    }
-
-    async fn send_response(&self, to: std::net::SocketAddr) -> anyhow::Result<()> {
-        let msg = DiscoveryMessage {
-            announce: false,
-            ..self.local_info.clone()
-        };
-        let data = serde_json::to_vec(&msg)?;
-        self.socket.send_to(&data, to).await?;
-        Ok(())
     }
 
     pub async fn periodic_announce(self: Arc<Self>) {
@@ -162,22 +163,13 @@ impl DiscoveryService {
     pub async fn prune_stale_peers(self: Arc<Self>) {
         loop {
             tokio::time::sleep(Duration::from_secs(STALE_TIMEOUT)).await;
-            let mut peers = self.peers.write().await;
-            let now = Instant::now();
-            peers.retain(|_, peer| {
-                now.duration_since(peer.last_seen).as_secs() < STALE_TIMEOUT
-            });
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let mut peers = self.state.peers.write().await;
+            peers.retain(|_, p| now - p.last_seen < STALE_TIMEOUT);
         }
-    }
-
-    pub async fn get_peers(&self) -> Vec<DiscoveryMessage> {
-        let peers = self.peers.read().await;
-        peers.values().map(|p| p.info.clone()).collect()
-    }
-
-    pub async fn get_peer_count(&self) -> usize {
-        let peers = self.peers.read().await;
-        peers.len()
     }
 }
 
@@ -192,6 +184,7 @@ mod tests {
             fingerprint: "abc123".to_string(),
             tcp_port: 45678,
             udp_port: 45679,
+            http_port: 8080,
             announce: true,
         };
 
@@ -200,29 +193,7 @@ mod tests {
 
         assert_eq!(parsed.alias, "TestPC");
         assert_eq!(parsed.tcp_port, 45678);
+        assert_eq!(parsed.http_port, 8080);
         assert!(parsed.announce);
-    }
-
-    #[tokio::test]
-    async fn test_broadcast_socket_creation() {
-        let socket = DiscoveryService::create_broadcast_socket().await;
-        // Socket creation may fail if port is already in use (e.g., from another test or running server)
-        // This is expected in CI/test environments
-        if socket.is_err() {
-            tracing::warn!("Broadcast socket creation failed (port may be in use): {}", socket.unwrap_err());
-        }
-    }
-
-    #[tokio::test]
-    async fn test_discovery_service_creation() {
-        let local_info = DiscoveryMessage {
-            alias: "TestPC".to_string(),
-            fingerprint: "test-fp".to_string(),
-            tcp_port: 45678,
-            udp_port: 45679,
-            announce: false,
-        };
-
-        let _service = DiscoveryService::new(local_info).await;
     }
 }

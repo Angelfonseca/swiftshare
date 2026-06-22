@@ -163,10 +163,9 @@ function showFilePreview(files) {
 function setupConnectButton() {
     connectBtn.addEventListener("click", async () => {
         const ip = manualIp.value.trim();
-        const port = parseInt(manualPort.value) || 45678;
 
         if (!ip) {
-            alert("Ingresa una IP válida");
+            alert("Ingresa una IP válida (ej: 192.168.1.100)");
             return;
         }
 
@@ -177,30 +176,65 @@ function setupConnectButton() {
         }
 
         connectBtn.disabled = true;
-        connectBtn.textContent = "Conectando...";
+        connectBtn.textContent = "Buscando...";
+        document.getElementById("manual-ip").disabled = true;
+        document.getElementById("manual-port").disabled = true;
 
         try {
             const response = await fetch(`${API_BASE}/api/peers/connect`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ip, port }),
+                body: JSON.stringify({ ip, tcp_port: 45678 }),
             });
 
             const data = await response.json();
 
-            if (response.ok && data.status === "discovering") {
-                console.log("Discovery sent to", ip);
-                setTimeout(refreshPeers, 2000);
+            if (response.ok) {
+                console.log("Probe sent to", ip, "-", data.message || "");
+                connectBtn.textContent = "Esperando respuesta...";
+
+                // Poll for peers 3 times with 2s delay
+                for (let i = 0; i < 3; i++) {
+                    await new Promise(r => setTimeout(r, 2000));
+                    await refreshPeers();
+                    const peers = await getPeers();
+                    if (peers.length > 0) {
+                        connectBtn.textContent = "¡Encontrado!";
+                        connectBtn.style.background = "#22c55e";
+                        break;
+                    }
+                }
+
+                connectBtn.disabled = false;
+                connectBtn.textContent = "Conectar";
+                connectBtn.style.background = "";
+                document.getElementById("manual-ip").disabled = false;
+                document.getElementById("manual-port").disabled = false;
             } else {
                 alert("Error: " + (data.error || "No se pudo conectar"));
+                connectBtn.disabled = false;
+                connectBtn.textContent = "Conectar";
+                document.getElementById("manual-ip").disabled = false;
+                document.getElementById("manual-port").disabled = false;
             }
         } catch (e) {
             alert("Error de conexión: " + e.message);
-        } finally {
             connectBtn.disabled = false;
             connectBtn.textContent = "Conectar";
+            document.getElementById("manual-ip").disabled = false;
+            document.getElementById("manual-port").disabled = false;
         }
     });
+}
+
+async function getPeers() {
+    try {
+        const res = await fetch(`${API_BASE}/api/peers`);
+        if (!res.ok) return [];
+        return await res.json();
+    } catch {
+        return [];
+    }
 }
 
 // Send button

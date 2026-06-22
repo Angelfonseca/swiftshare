@@ -31,15 +31,24 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("HTTP port: {}", cli.http_port);
     tracing::info!("Download dir: {:?}", download_dir);
 
+    let state = Arc::new(state::AppState::new(
+        alias.clone(),
+        cli.tcp_port,
+        cli.udp_port,
+        cli.http_port,
+        download_dir,
+    ));
+
     let local_info = discovery::DiscoveryMessage {
         alias: alias.clone(),
         fingerprint: generate_fingerprint(&alias, cli.tcp_port, cli.udp_port),
         tcp_port: cli.tcp_port,
         udp_port: cli.udp_port,
+        http_port: cli.http_port,
         announce: false,
     };
 
-    let discovery = discovery::DiscoveryService::new(local_info).await?;
+    let discovery = discovery::DiscoveryService::new(state.clone(), local_info).await?;
     let discovery = Arc::new(discovery);
 
     // Start discovery tasks
@@ -49,14 +58,6 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move { d.periodic_announce().await });
     let d = Arc::clone(&discovery);
     tokio::spawn(async move { d.prune_stale_peers().await });
-
-    let state = Arc::new(state::AppState::new(
-        alias,
-        cli.tcp_port,
-        cli.udp_port,
-        cli.http_port,
-        download_dir,
-    ));
 
     // Start TCP transfer server
     let tcp_server = transfer::TransferServer::new(cli.tcp_port, state.clone()).await?;
