@@ -132,6 +132,7 @@ impl DiscoveryService {
                         let peer_info = crate::state::PeerInfo {
                             alias: msg.alias.clone(),
                             fingerprint: msg.fingerprint.clone(),
+                            ip: from_addr.ip().to_string(),
                             tcp_port: msg.tcp_port,
                             udp_port: msg.udp_port,
                             last_seen: std::time::SystemTime::now()

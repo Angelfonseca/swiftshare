@@ -115,14 +115,36 @@ async fn send_file(
     mut multipart: Multipart,
 ) -> Json<serde_json::Value> {
     let mut saved_files = Vec::new();
+    let mut target_ip = String::new();
+    let mut target_tcp_port = 45678u16;
 
     loop {
         match multipart.next_field().await {
             Ok(Some(field)) => {
+                let name = field.name().unwrap_or("").to_string();
+
+                // extract target info from text fields
+                if name == "target_ip" {
+                    if let Ok(val) = field.text().await {
+                        target_ip = val.trim().to_string();
+                    }
+                    continue;
+                }
+                if name == "target_tcp_port" {
+                    if let Ok(val) = field.text().await {
+                        target_tcp_port = val.trim().parse().unwrap_or(45678);
+                    }
+                    continue;
+                }
+
+                if field.file_name().is_none() {
+                    continue;
+                }
+
                 let file_name = field.file_name().unwrap_or("unknown").to_string();
                 let content_type = field.content_type().unwrap_or("application/octet-stream").to_string();
 
-                let temp_dir = state.download_dir.join(".swiftshare-temp");
+                let temp_dir = state.download_dir.join("swiftshare-inbox");
                 tokio::fs::create_dir_all(&temp_dir).await.ok();
                 let temp_path = temp_dir.join(&file_name);
                 let partial_path = temp_dir.join(format!("{}.partial", file_name));
@@ -136,7 +158,6 @@ async fn send_file(
                             match stream.chunk().await {
                                 Ok(Some(chunk)) => {
                                     if let Err(e) = file.write_all(&chunk).await {
-                                        tracing::error!("Write error for {}: {}", file_name, e);
                                         let _ = tokio::fs::remove_file(&partial_path).await;
                                         return Json(serde_json::json!({"status": "error", "error": format!("Error de escritura: {}", e)}));
                                     }
@@ -144,7 +165,6 @@ async fn send_file(
                                 }
                                 Ok(None) => break,
                                 Err(e) => {
-                                    tracing::error!("Stream error for {}: {}", file_name, e);
                                     let _ = tokio::fs::remove_file(&partial_path).await;
                                     return Json(serde_json::json!({"status": "error", "error": format!("Error de stream: {}", e)}));
                                 }
@@ -152,7 +172,28 @@ async fn send_file(
                         }
 
                         tokio::fs::rename(&partial_path, &temp_path).await.ok();
-                        tracing::info!("Received file: {} ({} bytes)", file_name, total);
+                        tracing::info!("Saved locally: {} ({} bytes)", file_name, total);
+
+                        // Forward to target peer via TCP
+                        if !target_ip.is_empty() {
+                            let target_addr = format!("{}:{}", target_ip, target_tcp_port);
+                            if let Ok(addr) = target_addr.parse::<std::net::SocketAddr>() {
+                                tracing::info!("Forwarding {} to {}", file_name, target_addr);
+                                let sender = crate::transfer::FileSender::new(state.clone());
+                                match sender.send_file(&temp_path, addr).await {
+                                    Ok(_) => tracing::info!("Forwarded: {} to {}", file_name, target_addr),
+                                    Err(e) => {
+                                        tracing::error!("Failed to forward {}: {}", file_name, e);
+                                        return Json(serde_json::json!({
+                                            "status": "forward_error",
+                                            "error": format!("Archivo guardado localmente pero fallo el envio al peer: {}", e),
+                                            "file": file_name,
+                                            "size": total
+                                        }));
+                                    }
+                                }
+                            }
+                        }
 
                         saved_files.push(serde_json::json!({
                             "name": file_name,
@@ -161,7 +202,6 @@ async fn send_file(
                         }));
                     }
                     Err(e) => {
-                        tracing::error!("Failed to create file {}: {}", file_name, e);
                         return Json(serde_json::json!({
                             "status": "error",
                             "error": format!("No se pudo crear el archivo: {}", e)
@@ -171,7 +211,6 @@ async fn send_file(
             }
             Ok(None) => break,
             Err(e) => {
-                tracing::error!("Multipart error: {}", e);
                 return Json(serde_json::json!({
                     "status": "error",
                     "error": format!("Error al recibir archivo: {}", e)
@@ -190,7 +229,7 @@ async fn list_available_files(
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<serde_json::Value>> {
     let mut files = Vec::new();
-    let temp_dir = state.download_dir.join(".swiftshare-temp");
+    let temp_dir = state.download_dir.join("swiftshare-inbox");
 
     if let Ok(mut entries) = tokio::fs::read_dir(&temp_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {

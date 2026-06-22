@@ -31,6 +31,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     setupWebSocket();
     await refreshPeers();
     await refreshTransfers();
+    showToast("Los archivos se guardan en ~/Downloads/.swiftshare-temp/", "info");
 });
 
 // Toast notifications
@@ -236,6 +237,8 @@ function setupSendButton() {
 
                 const formData = new FormData();
                 formData.append("file", file, file.name);
+                formData.append("target_ip", selectedPeer.ip);
+                formData.append("target_tcp_port", selectedPeer.tcp_port.toString());
 
                 try {
                     const response = await fetch(`${API_BASE}/api/send`, {

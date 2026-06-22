@@ -24,6 +24,7 @@ pub struct AppState {
 pub struct PeerInfo {
     pub alias: String,
     pub fingerprint: String,
+    pub ip: String,
     pub tcp_port: u16,
     pub udp_port: u16,
     pub last_seen: u64,
@@ -108,6 +109,7 @@ impl AppState {
         PeerInfo {
             alias: self.alias.clone(),
             fingerprint: self.generate_fingerprint(),
+            ip: "127.0.0.1".to_string(),
             tcp_port: self.tcp_port,
             udp_port: self.udp_port,
             last_seen: std::time::SystemTime::now()
@@ -190,6 +192,7 @@ mod tests {
         let peer = PeerInfo {
             alias: "OtherPC".to_string(),
             fingerprint: "abc123".to_string(),
+            ip: "192.168.1.10".to_string(),
             tcp_port: 45678,
             udp_port: 45679,
             last_seen: std::time::SystemTime::now()
@@ -202,6 +205,7 @@ mod tests {
         let peers = state.get_peers().await;
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].alias, "OtherPC");
+        assert_eq!(peers[0].ip, "192.168.1.10");
     }
 
     #[tokio::test]
@@ -217,6 +221,7 @@ mod tests {
         let peer = PeerInfo {
             alias: "OldPC".to_string(),
             fingerprint: "old".to_string(),
+            ip: "192.168.1.20".to_string(),
             tcp_port: 45678,
             udp_port: 45679,
             last_seen: 0,
