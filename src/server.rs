@@ -122,24 +122,41 @@ async fn send_file(
                 let file_name = field.file_name().unwrap_or("unknown").to_string();
                 let content_type = field.content_type().unwrap_or("application/octet-stream").to_string();
 
-                // Stream to temp file instead of loading entire file into memory
                 let temp_dir = state.download_dir.join(".swiftshare-temp");
                 tokio::fs::create_dir_all(&temp_dir).await.ok();
                 let temp_path = temp_dir.join(&file_name);
+                let partial_path = temp_dir.join(format!("{}.partial", file_name));
 
-                match tokio::fs::File::create(&temp_path).await {
+                match tokio::fs::File::create(&partial_path).await {
                     Ok(mut file) => {
-                        let mut bytes_written: u64 = 0;
-                        // Use streaming bytes approach
-                        let data = field.bytes().await.unwrap_or_default();
-                        file.write_all(&data).await.ok();
-                        bytes_written = data.len() as u64;
+                        let mut stream = field;
+                        let mut total: u64 = 0;
 
-                        tracing::info!("Received file: {} ({} bytes)", file_name, bytes_written);
+                        loop {
+                            match stream.chunk().await {
+                                Ok(Some(chunk)) => {
+                                    if let Err(e) = file.write_all(&chunk).await {
+                                        tracing::error!("Write error for {}: {}", file_name, e);
+                                        let _ = tokio::fs::remove_file(&partial_path).await;
+                                        return Json(serde_json::json!({"status": "error", "error": format!("Error de escritura: {}", e)}));
+                                    }
+                                    total += chunk.len() as u64;
+                                }
+                                Ok(None) => break,
+                                Err(e) => {
+                                    tracing::error!("Stream error for {}: {}", file_name, e);
+                                    let _ = tokio::fs::remove_file(&partial_path).await;
+                                    return Json(serde_json::json!({"status": "error", "error": format!("Error de stream: {}", e)}));
+                                }
+                            }
+                        }
+
+                        tokio::fs::rename(&partial_path, &temp_path).await.ok();
+                        tracing::info!("Received file: {} ({} bytes)", file_name, total);
 
                         saved_files.push(serde_json::json!({
                             "name": file_name,
-                            "size": bytes_written,
+                            "size": total,
                             "type": content_type
                         }));
                     }
