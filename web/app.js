@@ -227,30 +227,56 @@ function setupSendButton() {
         sendBtn.disabled = true;
         sendBtn.textContent = `Enviando ${selectedFiles.length} archivo(s)...`;
 
+        let successCount = 0;
+        let failCount = 0;
+
         try {
-            const formData = new FormData();
             for (const file of selectedFiles) {
-                formData.append("files", file, file.name);
                 addTransferItem(file.name, selectedPeer.alias, "sending");
+
+                const formData = new FormData();
+                formData.append("file", file, file.name);
+
+                try {
+                    const response = await fetch(`${API_BASE}/api/send`, {
+                        method: "POST",
+                        body: formData,
+                    });
+
+                    if (!response.ok) {
+                        const text = await response.text();
+                        console.error("Upload failed:", response.status, text);
+                        updateTransferStatus(file.name, "failed", 0, `Error ${response.status}`);
+                        failCount++;
+                        continue;
+                    }
+
+                    const result = await response.json();
+
+                    if (result.status === "saved") {
+                        updateTransferStatus(file.name, "sending", 100, "Completado ✓");
+                        successCount++;
+                    } else {
+                        updateTransferStatus(file.name, "failed", 0, result.error || "Error");
+                        failCount++;
+                    }
+                } catch (e) {
+                    updateTransferStatus(file.name, "failed", 0, "Error de red");
+                    failCount++;
+                }
+
+                // Brief delay between files
+                await sleep(200);
             }
 
-            const response = await fetch(`${API_BASE}/api/send`, {
-                method: "POST",
-                body: formData,
-            });
-
-            const result = await response.json();
-
-            if (result.status === "saved") {
-                selectedFiles.forEach((file) => {
-                    updateTransferStatus(file.name, "sending", 100, "Completado ✓");
-                });
-                showToast(`${selectedFiles.length} archivo(s) enviados`, "success");
-            } else {
-                showToast("Error al guardar archivos", "error");
+            if (successCount > 0) {
+                showToast(`${successCount} archivo(s) enviados correctamente`, "success");
+            }
+            if (failCount > 0) {
+                showToast(`${failCount} archivo(s) fallaron`, "error");
             }
         } catch (e) {
-            showToast("Error de red: " + e.message, "error");
+            showToast("Error: " + e.message, "error");
         } finally {
             sendBtn.disabled = false;
             sendBtn.textContent = "Enviar";

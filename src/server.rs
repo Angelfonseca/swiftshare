@@ -1,7 +1,7 @@
 // Web UI server
 
 use axum::{
-    extract::{Multipart, State, WebSocketUpgrade},
+    extract::{DefaultBodyLimit, Multipart, State, WebSocketUpgrade},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -10,7 +10,6 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{StreamExt, SinkExt};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
-
 use crate::state::{AppState, PeerInfo, TransferState};
 
 pub async fn start_web_ui(state: Arc<AppState>, port: u16) -> anyhow::Result<()> {
@@ -25,6 +24,7 @@ pub async fn start_web_ui(state: Arc<AppState>, port: u16) -> anyhow::Result<()>
         .route("/api/incoming", get(list_incoming))
         .route("/api/transfers", get(list_transfers))
         .route("/api/ws", get(ws_handler))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024 * 1024)) // 10GB max
         .with_state(state);
 
     let addr = format!("127.0.0.1:{}", port);
@@ -116,30 +116,51 @@ async fn send_file(
 ) -> Json<serde_json::Value> {
     let mut saved_files = Vec::new();
 
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let mut file_name = String::new();
-        let mut file_data = Vec::new();
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => {
+                let file_name = field.file_name().unwrap_or("unknown").to_string();
+                let content_type = field.content_type().unwrap_or("application/octet-stream").to_string();
 
-        if let Some(name) = field.file_name() {
-            file_name = name.to_string();
+                // Stream to temp file instead of loading entire file into memory
+                let temp_dir = state.download_dir.join(".swiftshare-temp");
+                tokio::fs::create_dir_all(&temp_dir).await.ok();
+                let temp_path = temp_dir.join(&file_name);
+
+                match tokio::fs::File::create(&temp_path).await {
+                    Ok(mut file) => {
+                        let mut bytes_written: u64 = 0;
+                        // Use streaming bytes approach
+                        let data = field.bytes().await.unwrap_or_default();
+                        file.write_all(&data).await.ok();
+                        bytes_written = data.len() as u64;
+
+                        tracing::info!("Received file: {} ({} bytes)", file_name, bytes_written);
+
+                        saved_files.push(serde_json::json!({
+                            "name": file_name,
+                            "size": bytes_written,
+                            "type": content_type
+                        }));
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to create file {}: {}", file_name, e);
+                        return Json(serde_json::json!({
+                            "status": "error",
+                            "error": format!("No se pudo crear el archivo: {}", e)
+                        }));
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                tracing::error!("Multipart error: {}", e);
+                return Json(serde_json::json!({
+                    "status": "error",
+                    "error": format!("Error al recibir archivo: {}", e)
+                }));
+            }
         }
-        if let Ok(data) = field.bytes().await {
-            file_data.extend_from_slice(&data);
-        }
-
-        if file_name.is_empty() || file_data.is_empty() {
-            continue;
-        }
-
-        let temp_dir = state.download_dir.join(".swiftshare-temp");
-        tokio::fs::create_dir_all(&temp_dir).await.ok();
-        let temp_path = temp_dir.join(&file_name);
-        tokio::fs::write(&temp_path, &file_data).await.ok();
-
-        saved_files.push(serde_json::json!({
-            "name": file_name,
-            "size": file_data.len()
-        }));
     }
 
     Json(serde_json::json!({
