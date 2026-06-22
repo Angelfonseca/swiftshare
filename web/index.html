@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>swiftshare</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>swiftshare</h1>
+            <p class="subtitle">Transferencia P2P en red local</p>
+        </header>
+
+        <main>
+            <!-- Peer Discovery -->
+            <section class="card">
+                <h2>Dispositivos en tu red</h2>
+                <div id="peer-list" class="peer-list">
+                    <div class="empty-state">Buscando dispositivos...</div>
+                </div>
+                <div class="manual-connect">
+                    <input type="text" id="manual-ip" placeholder="IP del dispositivo">
+                    <input type="number" id="manual-port" placeholder="Puerto" value="45678">
+                    <button id="connect-btn">Conectar</button>
+                </div>
+            </section>
+
+            <!-- Send Files -->
+            <section class="card">
+                <h2>Enviar archivos</h2>
+                <div id="drop-zone" class="drop-zone">
+                    <div class="drop-zone-content">
+                        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                        </svg>
+                        <p>Arrastra archivos o carpetas aquí</p>
+                        <p class="or-text">o</p>
+                        <button id="browse-btn">Seleccionar archivos</button>
+                        <input type="file" id="file-input" multiple hidden>
+                        <input type="file" id="folder-input" webkitdirectory multiple hidden>
+                    </div>
+                </div>
+                <div id="file-preview" class="file-preview hidden">
+                    <h3>Archivos seleccionados</h3>
+                    <ul id="file-list"></ul>
+                    <div class="file-actions">
+                        <button id="send-btn" class="btn-primary">Enviar</button>
+                        <button id="cancel-btn" class="btn-secondary">Cancelar</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Active Transfers -->
+            <section class="card">
+                <h2>Transferencias activas</h2>
+                <div id="transfer-list" class="transfer-list">
+                    <div class="empty-state">No hay transferencias activas</div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>swiftshare v0.1.0</p>
+        </footer>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>
