@@ -6,6 +6,9 @@ Cargo.lock
 # Generated executable
 swiftshare
 
+# Precompiled releases (except releases/ folder)
+!/releases/
+
 # OS
 .DS_Store
 *.swp

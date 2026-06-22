@@ -14,6 +14,16 @@ Transferencia de archivos P2P para red local, escrita en Rust.
 
 ## Instalación
 
+### Opción 1: Binario precompilado (macOS ARM64 - Apple Silicon)
+
+```bash
+curl -L https://github.com/tu-usuario/swiftshare/releases/latest/download/swiftshare-macos-arm64 -o swiftshare
+chmod +x swiftshare
+./swiftshare
+```
+
+### Opción 2: Compilar desde fuente
+
 ```bash
 cargo install --path .
 ```
@@ -21,8 +31,11 @@ cargo install --path .
 ## Uso
 
 ```bash
-# Iniciar servidor
-swiftshare
+# Binario precompilado
+./swiftshare
+
+# O desde fuente
+cargo run
 
 # Con alias personalizado
 swiftshare --alias "MiPC"
@@ -66,5 +79,5 @@ swiftshare/
 ## Tests
 
 ```bash
-cargo test
+cargo test  # 23 tests pasando
 ```
