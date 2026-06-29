@@ -255,6 +255,7 @@ impl FileSender {
     pub async fn send_file(
         &self,
         file_path: &std::path::Path,
+        original_name: String,
         target_addr: std::net::SocketAddr,
         relative_path: Option<String>,
     ) -> anyhow::Result<()> {
@@ -271,11 +272,7 @@ impl FileSender {
 
         let file_meta = FileMetadata {
             id: uuid::Uuid::new_v4().to_string(),
-            name: file_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
+            name: original_name,
             size: file_size,
             mime_type: mime_guess::from_path(file_path)
                 .first_or_octet_stream()

@@ -266,7 +266,7 @@ async fn forward_stream_to_peer(
 
     // Forward via FileSender (handles token exchange correctly)
     let sender = crate::transfer::FileSender::new(state);
-    sender.send_file(&temp_path, target_addr, relative_path).await
+    sender.send_file(&temp_path, file_name.to_string(), target_addr, relative_path).await
         .map_err(|e| format!("Error enviando al peer: {}", e))?;
 
     let _ = tokio::fs::remove_file(&temp_path).await;
