@@ -21,6 +21,7 @@ pub async fn start_web_ui(state: Arc<AppState>, port: u16) -> anyhow::Result<()>
         .route("/app.js", get(static_js))
         .route("/styles.css", get(static_css))
         .route("/api/peers", get(list_peers))
+        .route("/api/state", get(get_state))
         .route("/api/peers/connect", post(manual_connect))
         .route("/api/send", post(send_file))
         .route("/api/files/list", get(list_available_files))
@@ -30,7 +31,7 @@ pub async fn start_web_ui(state: Arc<AppState>, port: u16) -> anyhow::Result<()>
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024 * 1024)) // 10GB max
         .with_state(state);
 
-    let addr = format!("127.0.0.1:{}", port);
+    let addr = format!("0.0.0.0:{}", port);
     tracing::info!("Web UI listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -64,7 +65,19 @@ async fn list_peers(
     State(state): State<Arc<AppState>>,
 ) -> Json<Vec<PeerInfo>> {
     let peers = state.get_peers().await;
+    tracing::info!("API: Returning {} peers", peers.len());
     Json(peers)
+}
+
+async fn get_state(
+    State(state): State<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "alias": state.alias,
+        "tcp_port": state.tcp_port,
+        "udp_port": state.udp_port,
+        "http_port": state.http_port,
+    }))
 }
 
 async fn manual_connect(
@@ -72,45 +85,57 @@ async fn manual_connect(
     Json(payload): Json<ManualConnectRequest>,
 ) -> Json<serde_json::Value> {
     let ip = payload.ip.trim().to_string();
-    let tcp_port = payload.tcp_port;
 
-    // Validate IP
     if !ip.contains('.') || ip.split('.').count() != 4 {
-        return Json(serde_json::json!({ "error": "Formato IP inválido. Usa: xxx.xxx.xxx.xxx" }));
+        return Json(serde_json::json!({ "error": "Formato IP invalido" }));
     }
 
-    // Try multiple discovery methods
-    let mut found = false;
+    // Send proper DiscoveryMessage to target
+    let msg = crate::discovery::DiscoveryMessage {
+        alias: state.alias.clone(),
+        fingerprint: format!("{}:{}:{}", state.alias, state.tcp_port, state.udp_port),
+        tcp_port: state.tcp_port,
+        udp_port: state.udp_port,
+        http_port: state.http_port,
+        announce: true,
+    };
 
-    // Method 1: Direct UDP to IP:45679
-    let direct_addr = format!("{}:{}", ip, 45679);
-    if let Ok(addr) = direct_addr.parse::<std::net::SocketAddr>() {
-        if let Err(e) = send_discovery_to(addr).await {
-            tracing::warn!("Direct discovery failed: {}", e);
-        } else {
-            found = true;
+    let data = serde_json::to_vec(&msg).unwrap_or_default();
+    let udp_target = format!("{}:{}", ip, 45679);
+
+    if let Ok(target_addr) = udp_target.parse::<std::net::SocketAddr>() {
+        if let Ok(socket) = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        ) {
+            socket.set_broadcast(true).ok();
+            socket.set_nonblocking(true).ok();
+            let bind_addr = "0.0.0.0:0".parse::<std::net::SocketAddr>().unwrap();
+            let _ = socket.bind(&bind_addr.into());
+            let std_socket: std::net::UdpSocket = socket.into();
+            let _ = std_socket.send_to(&data, target_addr);
+            tracing::info!("Manual discovery sent to {}", ip);
+
+            let peer_info = crate::state::PeerInfo {
+                alias: format!("{} (manual)", ip),
+                fingerprint: format!("manual:{}", ip),
+                ip: ip.clone(),
+                tcp_port: payload.tcp_port,
+                udp_port: 45679,
+                last_seen: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            };
+            state.add_peer(peer_info).await;
         }
     }
 
-    // Method 2: Broadcast to subnet 192.168.x.255
-    let parts: Vec<&str> = ip.split('.').collect();
-    if parts.len() == 4 {
-        let subnet = format!("{}.255:45679", parts[..3].join("."));
-        if let Ok(addr) = subnet.parse::<std::net::SocketAddr>() {
-            let _ = send_discovery_to(addr).await;
-        }
-    }
-
-    // Method 3: Broadcast to 255.255.255.255
-    if let Ok(addr) = "255.255.255.255:45679".parse::<std::net::SocketAddr>() {
-        let _ = send_discovery_to(addr).await;
-    }
-
-    if found {
-        Json(serde_json::json!({ "status": "success", "message": format!("Probing {}... Espera 3 segundos para que responda", ip) }))
-    } else {
-        Json(serde_json::json!({ "status": "probing", "message": format!("Enviando probe a {}... Espera 3 segundos", ip) }))
-    }
+    Json(serde_json::json!({
+        "status": "success",
+        "message": format!("Probe enviado a {}. Espera unos segundos...", ip)
+    }))
 }
 
 async fn send_file(

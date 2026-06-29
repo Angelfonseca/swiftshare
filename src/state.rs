@@ -18,6 +18,7 @@ pub struct AppState {
     pub peers: Arc<RwLock<HashMap<String, PeerInfo>>>,
     pub transfers: Arc<RwLock<HashMap<String, TransferState>>>,
     pub progress_tx: broadcast::Sender<ProgressEvent>,
+    pub discovery_socket: Arc<RwLock<Option<std::net::SocketAddr>>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -102,6 +103,7 @@ impl AppState {
             peers: Arc::new(RwLock::new(HashMap::new())),
             transfers: Arc::new(RwLock::new(HashMap::new())),
             progress_tx,
+            discovery_socket: Arc::new(RwLock::new(None)),
         }
     }
 

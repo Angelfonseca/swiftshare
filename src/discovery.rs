@@ -124,9 +124,10 @@ impl DiscoveryService {
                         }
 
                         tracing::info!(
-                            "Discovered peer: {} from {}",
+                            "Discovered peer: {} from {}. Total peers in state: {}",
                             msg.alias,
-                            from_addr
+                            from_addr,
+                            self.state.peers.read().await.len() + 1
                         );
 
                         let peer_info = crate::state::PeerInfo {

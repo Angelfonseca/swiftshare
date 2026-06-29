@@ -52,6 +52,14 @@ async fn main() -> anyhow::Result<()> {
         Ok(discovery) => {
             let discovery = Arc::new(discovery);
 
+            // Save discovery socket so manual_connect can use it
+            {
+                let addr = format!("127.0.0.1:{}", cli.udp_port);
+                let socket_addr = std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)), cli.udp_port);
+                let mut ds = state.discovery_socket.write().await;
+                *ds = Some(socket_addr);
+            }
+
             let d = Arc::clone(&discovery);
             tokio::spawn(async move { d.listen().await });
             let d = Arc::clone(&discovery);
@@ -62,8 +70,8 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("UDP discovery active on port {}", cli.udp_port);
         }
         Err(e) => {
-            tracing::warn!("UDP discovery not available (otros dispositivos no se verán automáticamente): {}", e);
-            tracing::warn!("Usa la conexión manual por IP en la UI web");
+            tracing::warn!("UDP discovery not available: {}", e);
+            tracing::warn!("Usa conexion manual por IP");
         }
     }
 
@@ -75,6 +83,8 @@ async fn main() -> anyhow::Result<()> {
         state.clone(),
         cli.http_port,
     );
+
+    tracing::info!("Web UI available at http://localhost:{}", cli.http_port);
 
     // Run all services concurrently
     tokio::select! {

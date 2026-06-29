@@ -29,10 +29,30 @@ document.addEventListener("DOMContentLoaded", async () => {
     setupSendButton();
     setupCancelButton();
     setupWebSocket();
+    await fetchLocalState();
     await refreshPeers();
     await refreshTransfers();
+    
+    // Start periodic refresh
+    setInterval(refreshPeers, 3000);
+    setInterval(refreshTransfers, 3000);
+
     showToast("Los archivos se guardan en ~/Downloads/.swiftshare-temp/", "info");
 });
+
+// Fetch local state (alias, etc)
+async function fetchLocalState() {
+    try {
+        const response = await fetch("/api/state");
+        if (!response.ok) return;
+        const data = await response.json();
+        if (aliasEl) {
+            aliasEl.textContent = data.alias;
+        }
+    } catch (e) {
+        console.error("Failed to fetch local state:", e);
+    }
+}
 
 // Toast notifications
 function showToast(message, type = "info") {
@@ -174,7 +194,7 @@ function setupConnectButton() {
         manualIp.disabled = true;
 
         try {
-            const response = await fetch(`${API_BASE}/api/peers/connect`, {
+            const response = await fetch("/api/peers/connect", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ ip, tcp_port: 45679 }),
@@ -238,11 +258,12 @@ function setupSendButton() {
                 const formData = new FormData();
                 formData.append("file", file, file.name);
 
-                const url = `${API_BASE}/api/send?target_ip=${encodeURIComponent(selectedPeer.ip)}&target_tcp_port=${selectedPeer.tcp_port}`;
-                const response = await fetch(url, {
-                    method: "POST",
-                    body: formData,
-                });
+                try {
+                    const url = `/api/send?target_ip=${encodeURIComponent(selectedPeer.ip)}&target_tcp_port=${selectedPeer.tcp_port}`;
+                    const response = await fetch(url, {
+                        method: "POST",
+                        body: formData,
+                    });
 
                     if (!response.ok) {
                         const text = await response.text();
@@ -302,7 +323,7 @@ function updateSendButton() {
 // Refresh peers list
 async function refreshPeers() {
     try {
-        const response = await fetch(`${API_BASE}/api/peers`);
+        const response = await fetch("/api/peers");
         if (!response.ok) return;
         const peers = await response.json();
         renderPeers(peers);
@@ -313,7 +334,7 @@ async function refreshPeers() {
 
 async function getPeers() {
     try {
-        const res = await fetch(`${API_BASE}/api/peers`);
+        const res = await fetch("/api/peers");
         if (!res.ok) return [];
         return await res.json();
     } catch {
@@ -366,7 +387,7 @@ function renderPeers(peers) {
 // Refresh transfers list
 async function refreshTransfers() {
     try {
-        const response = await fetch(`${API_BASE}/api/transfers`);
+        const response = await fetch("/api/transfers");
         if (!response.ok) return;
         const transfers = await response.json();
         renderTransfers(transfers);
@@ -383,9 +404,11 @@ function renderTransfers(transfers) {
 
     transferList.innerHTML = "";
     transfers.forEach((transfer) => {
-        transfer.forEach((file) => {
-            addTransferItem(file.name, transfer.peer_alias, "sending");
-        });
+        if (transfer.files && Array.isArray(transfer.files)) {
+            transfer.files.forEach((file) => {
+                addTransferItem(file.name, transfer.peer_alias, "sending");
+            });
+        }
     });
 }
 
@@ -461,6 +484,4 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Periodic refresh
-setInterval(refreshPeers, 3000);
-setInterval(refreshTransfers, 2000);
+
