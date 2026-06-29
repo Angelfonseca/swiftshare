@@ -148,7 +148,16 @@ async fn handle_transfer_connection(
                         anyhow::anyhow!("Unknown file {}", file_id)
                     })?;
 
-                    let save_path = state.download_dir.join(&meta.name);
+                    let save_path = if let Some(rel_path) = &meta.relative_path {
+                        let full_path = state.download_dir.join(rel_path);
+                        if let Some(parent) = full_path.parent() {
+                            tokio::fs::create_dir_all(parent).await?;
+                        }
+                        full_path
+                    } else {
+                        state.download_dir.join(&meta.name)
+                    };
+
                     let file = tokio::fs::File::create(&save_path).await?;
 
                     active_file = Some(ActiveReceive {
@@ -247,6 +256,7 @@ impl FileSender {
         &self,
         file_path: &std::path::Path,
         target_addr: std::net::SocketAddr,
+        relative_path: Option<String>,
     ) -> anyhow::Result<()> {
         let stream = tokio::net::TcpStream::connect(target_addr)
             .await
@@ -271,6 +281,7 @@ impl FileSender {
                 .first_or_octet_stream()
                 .to_string(),
             sha256: sha256.clone(),
+            relative_path,
         };
 
         let session_id = uuid::Uuid::new_v4().to_string();

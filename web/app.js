@@ -8,7 +8,9 @@ let ws = null;
 // DOM elements
 const dropZone = document.getElementById("drop-zone");
 const browseBtn = document.getElementById("browse-btn");
+const browseFolderBtn = document.getElementById("browse-folder-btn");
 const fileInput = document.getElementById("file-input");
+const folderInput = document.getElementById("folder-input");
 const filePreview = document.getElementById("file-preview");
 const fileList = document.getElementById("file-list");
 const fileCount = document.getElementById("file-count");
@@ -147,8 +149,16 @@ async function collectEntry(entry, files) {
 // Browse buttons
 function setupBrowseButtons() {
     browseBtn.addEventListener("click", () => fileInput.click());
+    browseFolderBtn.addEventListener("click", () => folderInput.click());
+    
     fileInput.addEventListener("change", (e) => {
         selectedFiles = Array.from(e.target.files);
+        showFilePreview(selectedFiles);
+    });
+
+    folderInput.addEventListener("change", (e) => {
+        selectedFiles = Array.from(e.target.files);
+        // Ensure webkitRelativePath is preserved
         showFilePreview(selectedFiles);
     });
 }
@@ -161,8 +171,9 @@ function showFilePreview(files) {
     files.forEach((file) => {
         totalSize += file.size;
         const li = document.createElement("li");
+        const displayName = file.webkitRelativePath || file.name;
         li.innerHTML = `
-            <span class="file-name">${file.name}</span>
+            <span class="file-name">${displayName}</span>
             <span class="file-size">${formatSize(file.size)}</span>
         `;
         fileList.appendChild(li);
@@ -253,10 +264,11 @@ function setupSendButton() {
 
         try {
             for (const file of selectedFiles) {
-                addTransferItem(file.name, selectedPeer.alias, "sending");
+                const displayName = file.webkitRelativePath || file.name;
+                addTransferItem(displayName, selectedPeer.alias, "sending");
 
                 const formData = new FormData();
-                formData.append("file", file, file.name);
+                formData.append("file", file, displayName);
 
                 try {
                     const url = `/api/send?target_ip=${encodeURIComponent(selectedPeer.ip)}&target_tcp_port=${selectedPeer.tcp_port}`;
@@ -312,6 +324,7 @@ function setupCancelButton() {
         filePreview.classList.add("hidden");
         fileList.innerHTML = "";
         fileInput.value = "";
+        folderInput.value = "";
         updateSendButton();
     });
 }

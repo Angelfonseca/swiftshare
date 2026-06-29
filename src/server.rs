@@ -160,12 +160,21 @@ async fn send_file(
                 if field.file_name().is_none() { continue; }
 
                 let file_name = field.file_name().unwrap_or("unknown").to_string();
+                // Check for folder structure in the multipart field name or a custom header
+                // Note: Standard multipart doesn't always send the full path, 
+                // but some browsers send it in the filename if 'webkitdirectory' is used.
+                let relative_path = if file_name.contains('/') || file_name.contains('\\') {
+                    Some(file_name.clone())
+                } else {
+                    None
+                };
+                
                 let content_type = field.content_type().unwrap_or("application/octet-stream").to_string();
 
                 let target_addr = format!("{}:{}", target_ip, target_tcp_port);
                 match target_addr.parse::<std::net::SocketAddr>() {
                     Ok(addr) => {
-                        match forward_stream_to_peer(field, &file_name, addr, state.clone()).await {
+                        match forward_stream_to_peer(field, &file_name, relative_path, addr, state.clone()).await {
                             Ok(size) => {
                                 saved_files.push(serde_json::json!({
                                     "name": file_name,
@@ -215,6 +224,7 @@ struct SendQueryParams {
 async fn forward_stream_to_peer(
     mut field: axum::extract::multipart::Field<'_>,
     file_name: &str,
+    relative_path: Option<String>,
     target_addr: std::net::SocketAddr,
     state: Arc<AppState>,
 ) -> Result<u64, String> {
@@ -225,8 +235,10 @@ async fn forward_stream_to_peer(
     tokio::fs::create_dir_all(&temp_dir).await
         .map_err(|e| format!("Error creating temp dir: {}", e))?;
 
-    let temp_path = temp_dir.join(file_name);
-    let partial_path = temp_dir.join(format!("{}.partial", file_name));
+    // Use a flat name for the local temp file to avoid directory issues in temp_dir
+    let safe_temp_name = uuid::Uuid::new_v4().to_string();
+    let temp_path = temp_dir.join(&safe_temp_name);
+    let partial_path = temp_dir.join(format!("{}.partial", safe_temp_name));
 
     let mut file = tokio::fs::File::create(&partial_path).await
         .map_err(|e| format!("Error creating temp file: {}", e))?;
@@ -254,7 +266,7 @@ async fn forward_stream_to_peer(
 
     // Forward via FileSender (handles token exchange correctly)
     let sender = crate::transfer::FileSender::new(state);
-    sender.send_file(&temp_path, target_addr).await
+    sender.send_file(&temp_path, target_addr, relative_path).await
         .map_err(|e| format!("Error enviando al peer: {}", e))?;
 
     let _ = tokio::fs::remove_file(&temp_path).await;

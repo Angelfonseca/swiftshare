@@ -42,6 +42,7 @@ pub struct FileMetadata {
     pub size: u64,
     pub mime_type: String,
     pub sha256: String,
+    pub relative_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
