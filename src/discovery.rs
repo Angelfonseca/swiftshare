@@ -2,15 +2,12 @@
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::net::UdpSocket;
-use tokio::sync::RwLock;
 
 use crate::state::AppState;
 
-const BROADCAST_PORT: u16 = 45679;
 const MULTICAST_ADDR: &str = "224.0.0.167";
 const ANNOUNCE_INTERVAL: u64 = 2;
 const STALE_TIMEOUT: u64 = 10;
@@ -33,7 +30,9 @@ pub struct DiscoveryService {
 
 impl DiscoveryService {
     pub async fn new(state: Arc<AppState>, local_info: DiscoveryMessage) -> anyhow::Result<Self> {
-        let socket = Self::create_socket().await?;
+        // Bind the port we actually announce, not a hardcoded one, or
+        // --udp-port silently does nothing and two instances collide.
+        let socket = Self::create_socket(local_info.udp_port).await?;
         Ok(Self {
             socket,
             state,
@@ -41,7 +40,7 @@ impl DiscoveryService {
         })
     }
 
-    async fn create_socket() -> anyhow::Result<Arc<UdpSocket>> {
+    async fn create_socket(port: u16) -> anyhow::Result<Arc<UdpSocket>> {
         let socket = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::DGRAM,
@@ -51,12 +50,17 @@ impl DiscoveryService {
 
         socket.set_broadcast(true).context("Failed to set broadcast")?;
         socket.set_reuse_address(true).context("Failed to set reuse address")?;
+        // On macOS/BSD, SO_REUSEADDR alone doesn't let two processes share a
+        // UDP port — needed so two swiftshare instances on the same machine
+        // (testing, or a dev box) can both hear the same broadcast.
+        #[cfg(unix)]
+        socket.set_reuse_port(true).context("Failed to set reuse port")?;
 
         use std::net::SocketAddr;
-        let addr: SocketAddr = format!("0.0.0.0:{}", BROADCAST_PORT).parse().unwrap();
+        let addr: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
         socket
             .bind(&addr.into())
-            .context("Failed to bind UDP socket")?;
+            .with_context(|| format!("Failed to bind UDP port {}", port))?;
 
         socket.set_nonblocking(true).context("Failed to set nonblocking")?;
 
@@ -72,42 +76,24 @@ impl DiscoveryService {
         msg.announce = true;
 
         let data = serde_json::to_vec(&msg)?;
+        let port = self.local_info.udp_port;
 
-        // Method 1: Broadcast to 255.255.255.255
-        let broadcast_addr: std::net::SocketAddr = format!("255.255.255.255:{}", BROADCAST_PORT)
-            .parse()
-            .context("Failed to parse broadcast address")?;
-        let _ = self.socket.send_to(&data, broadcast_addr).await;
-
-        // Method 2: Multicast
-        let multicast_addr: std::net::SocketAddr =
-            format!("{}:{}", MULTICAST_ADDR, BROADCAST_PORT).parse().context(
-                "Failed to parse multicast address",
-            )?;
-        let _ = self.socket.send_to(&data, multicast_addr).await;
-
-        // Method 3: Broadcast to local subnet (192.168.x.x)
-        let broadcast_subnet: std::net::SocketAddr = format!("192.168.255.255:{}", BROADCAST_PORT)
-            .parse()
-            .context("Failed to parse subnet broadcast address")?;
-        let _ = self.socket.send_to(&data, broadcast_subnet).await;
+        // Networks differ in what they let through, so try all three.
+        for target in [
+            format!("255.255.255.255:{}", port),
+            format!("{}:{}", MULTICAST_ADDR, port),
+            format!("192.168.255.255:{}", port),
+        ] {
+            if let Ok(addr) = target.parse::<std::net::SocketAddr>() {
+                let _ = self.socket.send_to(&data, addr).await;
+            }
+        }
 
         Ok(())
     }
 
-    pub async fn discover_single(&self, ip: &str) -> anyhow::Result<()> {
-        let msg = self.local_info.clone();
-        let data = serde_json::to_vec(&msg)?;
-
-        // Try direct UDP to specific IP
-        let addr = format!("{}:{}", ip, BROADCAST_PORT);
-        let socket_addr: std::net::SocketAddr = addr
-            .parse()
-            .context(format!("Invalid address: {}", addr))?;
-        self.socket.send_to(&data, socket_addr).await?;
-
-        tracing::info!("Discovery probe sent to {}", ip);
-        Ok(())
+    pub fn socket(&self) -> Arc<UdpSocket> {
+        Arc::clone(&self.socket)
     }
 
     pub async fn listen(self: Arc<Self>) {
@@ -116,33 +102,43 @@ impl DiscoveryService {
         loop {
             match self.socket.recv_from(&mut buf).await {
                 Ok((len, from_addr)) => {
-                    let data = &buf[..len];
+                    let Ok(msg) = serde_json::from_slice::<DiscoveryMessage>(&buf[..len]) else {
+                        continue;
+                    };
+                    if msg.fingerprint == self.local_info.fingerprint {
+                        continue;
+                    }
 
-                    if let Ok(msg) = serde_json::from_slice::<DiscoveryMessage>(data) {
-                        if msg.fingerprint == self.local_info.fingerprint {
-                            continue;
-                        }
+                    let known = self
+                        .state
+                        .peers
+                        .read()
+                        .await
+                        .contains_key(&msg.fingerprint);
+                    if !known {
+                        tracing::info!("Discovered peer: {} at {}", msg.alias, from_addr);
+                    }
 
-                        tracing::info!(
-                            "Discovered peer: {} from {}. Total peers in state: {}",
-                            msg.alias,
-                            from_addr,
-                            self.state.peers.read().await.len() + 1
-                        );
-
-                        let peer_info = crate::state::PeerInfo {
+                    self.state
+                        .add_peer(crate::state::PeerInfo {
                             alias: msg.alias.clone(),
                             fingerprint: msg.fingerprint.clone(),
                             ip: from_addr.ip().to_string(),
                             tcp_port: msg.tcp_port,
                             udp_port: msg.udp_port,
-                            last_seen: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs(),
-                        };
+                            last_seen: crate::state::now_secs(),
+                        })
+                        .await;
 
-                        self.state.add_peer(peer_info).await;
+                    // Answer announcements directly. Broadcast is filtered on
+                    // plenty of networks, so this unicast reply is what makes
+                    // "connect by IP" work in both directions.
+                    if msg.announce {
+                        let mut reply = self.local_info.clone();
+                        reply.announce = false;
+                        if let Ok(data) = serde_json::to_vec(&reply) {
+                            let _ = self.socket.send_to(&data, from_addr).await;
+                        }
                     }
                 }
                 Err(e) => {
@@ -165,12 +161,12 @@ impl DiscoveryService {
     pub async fn prune_stale_peers(self: Arc<Self>) {
         loop {
             tokio::time::sleep(Duration::from_secs(STALE_TIMEOUT)).await;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            let mut peers = self.state.peers.write().await;
-            peers.retain(|_, p| now - p.last_seen < STALE_TIMEOUT);
+            let now = crate::state::now_secs();
+            self.state
+                .peers
+                .write()
+                .await
+                .retain(|_, p| now.saturating_sub(p.last_seen) < STALE_TIMEOUT);
         }
     }
 }

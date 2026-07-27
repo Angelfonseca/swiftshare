@@ -4,47 +4,75 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>swiftshare</title>
+    <link rel="icon" type="image/png" href="/img/favicon.png">
     <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>⚡ swiftshare</h1>
-            <p class="subtitle">Transferencia P2P en red local</p>
-            <div class="device-alias" id="alias">Cargando...</div>
-        </header>
+    <div class="atmosphere" aria-hidden="true"></div>
 
-        <main>
-            <!-- Peer Discovery -->
-            <section class="card">
+    <div class="shell">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="brand">
+                <img src="/img/logo-mark.png" alt="" class="brand-mark">
+                <div class="brand-text">
+                    <span class="brand-word">swift<em>share</em></span>
+                    <span class="brand-tag">P2P local</span>
+                </div>
+            </div>
+
+            <div class="identity">
+                <span class="identity-label">Este equipo</span>
+                <span class="identity-alias" id="alias">Cargando…</span>
+                <span class="identity-path" id="download-path" title=""></span>
+            </div>
+
+            <button id="notify-btn" class="btn btn-toggle">
+                <span class="dot"></span>
+                <span class="btn-toggle-label">Notificaciones</span>
+            </button>
+
+            <section class="panel">
                 <h2>
-                    <span class="icon">📡</span> Dispositivos
+                    <span>Dispositivos</span>
                     <span class="status-badge searching" id="search-badge">Buscando</span>
                 </h2>
                 <div id="peer-list" class="peer-list">
-                    <div class="empty-state">
-                        Buscando dispositivos en la red...
-                        <div class="hint">Abre swiftshare en otro dispositivo en la misma red</div>
+                    <div class="empty-state small">
+                        Buscando en la red…
                     </div>
                 </div>
                 <div class="manual-connect">
-                    <input type="text" id="manual-ip" placeholder="IP del dispositivo (ej: 192.168.1.100)">
-                    <button id="connect-btn" class="btn btn-primary">Conectar</button>
+                    <input type="text" id="manual-ip" placeholder="IP manual" inputmode="decimal">
+                    <button id="connect-btn" class="btn btn-secondary">Conectar</button>
                 </div>
             </section>
 
-            <!-- Send Files -->
-            <section class="card">
-                <h2><span class="icon">📤</span> Enviar archivos</h2>
+            <section class="panel panel-received">
+                <h2>
+                    <span>Recibidos</span>
+                    <button id="open-folder-btn" class="link-btn">Abrir carpeta</button>
+                </h2>
+                <div id="received-list" class="received-list">
+                    <div class="empty-state small">Nada por aquí todavía</div>
+                </div>
+            </section>
+        </aside>
+
+        <!-- Main -->
+        <main class="main">
+            <section class="drop-card">
                 <div id="drop-zone" class="drop-zone">
                     <div class="drop-zone-content">
                         <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775a5.25 5.25 0 0110.233-2.338C12.29 12.795 12 16.125 12 19.5"/>
                         </svg>
-                        <p>Arrastra archivos aquí</p>
+                        <p class="drop-title">Suelta archivos o carpetas</p>
                         <p class="or-text">o</p>
-                        <button id="browse-btn" class="btn btn-secondary">Seleccionar archivos</button>
-                        <button id="browse-folder-btn" class="btn btn-secondary">Seleccionar carpeta</button>
+                        <div class="browse-row">
+                            <button id="browse-btn" class="btn btn-secondary">Elegir archivos</button>
+                            <button id="browse-folder-btn" class="btn btn-secondary">Elegir carpeta</button>
+                        </div>
                         <input type="file" id="file-input" multiple hidden>
                         <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
                     </div>
@@ -54,23 +82,48 @@
                     <ul id="file-list"></ul>
                     <div class="file-actions">
                         <button id="send-btn" class="btn btn-primary" disabled>Enviar</button>
-                        <button id="cancel-btn" class="btn btn-secondary">Cancelar</button>
+                        <button id="cancel-btn" class="btn btn-secondary">Limpiar</button>
                     </div>
                 </div>
             </section>
 
-            <!-- Active Transfers -->
-            <section class="card">
-                <h2><span class="icon">🔄</span> Transferencias</h2>
-                <div id="transfer-list" class="transfer-list">
-                    <div class="empty-state">Sin transferencias activas</div>
+            <section class="panel panel-transfers">
+                <div class="tabs" role="tablist">
+                    <button class="tab active" id="tab-active" role="tab" aria-selected="true">Activas</button>
+                    <button class="tab" id="tab-history" role="tab" aria-selected="false">Historial</button>
+                </div>
+
+                <div id="view-active" class="tab-view">
+                    <div id="transfer-list" class="transfer-list">
+                        <div class="empty-state">Sin transferencias en curso</div>
+                    </div>
+                </div>
+
+                <div id="view-history" class="tab-view hidden">
+                    <div class="history-toolbar">
+                        <button id="clear-history-btn" class="link-btn">Borrar historial</button>
+                    </div>
+                    <div id="history-list" class="history-list">
+                        <div class="empty-state">Aún no hay historial</div>
+                    </div>
                 </div>
             </section>
         </main>
+    </div>
 
-        <footer>
-            Los archivos se guardan en ~/Downloads/.swiftshare-temp/
-        </footer>
+    <!-- Approval prompt for incoming transfers -->
+    <div class="modal-backdrop hidden" id="incoming-modal">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="incoming-title">
+            <h3 id="incoming-title">Transferencia entrante</h3>
+            <p class="modal-sub"><strong id="incoming-peer"></strong> quiere enviarte <span id="incoming-summary"></span></p>
+            <ul class="modal-files" id="incoming-files"></ul>
+            <div class="modal-timer">Se rechaza automáticamente en <span id="incoming-countdown">120</span>s</div>
+            <div class="modal-actions">
+                <button id="accept-btn" class="btn btn-primary">Aceptar</button>
+                <button id="reject-btn" class="btn btn-secondary">Rechazar</button>
+            </div>
+            <div class="modal-queue hidden" id="incoming-queue"></div>
+        </div>
     </div>
 
     <div class="toast-container" id="toast-container"></div>

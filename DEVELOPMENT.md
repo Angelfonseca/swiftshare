@@ -1,76 +1,74 @@
 # swiftshare - Desarrollo
 
-## Estado del Proyecto
+## Notas de diseño
 
-| Fase | Nombre | Estado | Completada |
-|------|--------|--------|------------|
-| 0 | Scaffolding del proyecto | **completed** | 2026-06-22 |
-| 1 | UI Web Embebida | **completed** | 2026-06-22 |
-| 2 | Descubrimiento UDP | **completed** | 2026-06-22 |
-| 3 | Conexión Manual por IP | **completed** | 2026-06-22 |
-| 4 | Protocolo TCP | **completed** | 2026-06-22 |
-| 5 | UI Envío de Archivos | **completed** | 2026-06-22 |
-| 6 | UI Recepción | **completed** | 2026-06-22 |
-| 7 | Progreso WebSocket | **completed** | 2026-06-22 |
-| 8 | Múltiples Archivos | **completed** | 2026-06-22 |
-| 9 | Resumir Transferencias | **completed** | 2026-06-22 |
-| 10 | Tests Completos | **completed** | 2026-06-22 |
-| 11 | Pulido/Release | **completed** | 2026-06-22 |
+### Camino de envío
 
----
+El navegador manda una sola petición multipart a `/api/send`. El primer campo es
+un **manifiesto** JSON con nombres, tamaños y rutas relativas; los siguientes son
+los archivos, en ese mismo orden.
 
-## Resumen Final
+El servidor abre la conexión TCP al peer, envía `PrepareTransfer` con el
+manifiesto y **espera la aprobación** antes de leer un solo byte de archivo. A
+partir de ahí los bytes van del multipart al socket TCP directamente, calculando
+el SHA-256 de paso. La respuesta HTTP no vuelve hasta que el peer tiene todo.
 
-**swiftshare** está completamente funcional con 23 tests pasando.
+Esto evita las tres pasadas de la versión anterior (guardar en temporal, releer
+para hashear, releer para enviar) y el buffer completo en disco antes de mover
+nada. La contrapresión sale gratis: el multipart se lee al ritmo del socket.
 
-### Arquitectura
-- **UDP 45679**: Descubrimiento de peers (broadcast + multicast)
-- **TCP 45678**: Transferencia de archivos con chunks de 64KB
-- **HTTP 8080**: Web UI (localhost)
+### Aprobación
 
-### Funcionalidades completadas
-- CLI con Clap (alias, puertos, directorio descarga)
-- Web UI moderna con drag & drop
-- Descubrimiento automático UDP
-- Conexión manual por IP
-- Upload de múltiples archivos
-- Transferencia P2P vía TCP
-- Verificación SHA-256
-- Progreso en tiempo real vía WebSocket
-- Soporte para reanudar transferencias
-- Archivos embebidos en binario
+`AppState::await_decision` registra un `oneshot` por sesión y bloquea el
+handler de recepción. `POST /api/decision` lo resuelve. Si nadie contesta en
+`DECISION_TIMEOUT` (120 s) se trata como rechazo — nunca se escriben archivos
+que nadie aprobó. El emisor espera 15 s más que eso antes de rendirse.
 
-### Estructura del proyecto
-```
-swiftshare/
-├── Cargo.toml
-├── Cargo.lock
-├── .gitignore
-├── README.md
-├── DEVELOPMENT.md
-├── src/
-│   ├── main.rs          # Entry point (tokio::select!)
-│   ├── cli.rs           # CLI parsing
-│   ├── error.rs         # Error types
-│   ├── protocol.rs      # Protocolo TCP
-│   ├── codec.rs         # Framing TCP
-│   ├── state.rs         # Estado compartido
-│   ├── server.rs        # Web UI server
-│   ├── discovery.rs     # UDP discovery
-│   ├── transfer.rs      # Transferencia TCP
-│   └── resume.rs        # Reanudar transferencias
-└── web/
-    ├── index.html       # UI web
-    ├── styles.css       # Estilos
-    └── app.js           # JavaScript
-```
+### Eventos
 
-### Verificación
+Un único `broadcast::Sender<Event>` alimenta el WebSocket. Los eventos van
+etiquetados (`incoming`, `decided`, `progress`, `fileDone`, `sessionDone`) y la
+UI conmuta sobre `type`. El progreso se limita a uno cada 100 ms por archivo
+para no inundar la conexión en transferencias grandes.
+
+La lista de transferencias la sirve `/api/transfers`: el servidor es la fuente
+de verdad de qué filas existen, y el WebSocket solo las anima. Así un refresco
+de página recupera el estado.
+
+### Seguridad
+
+Todo lo que llega del peer es hostil por defecto:
+
+- `safe_join` rechaza `..`, prefijos de unidad y NUL, y recorta puntos finales
+  (Windows los ignora, lo que permitiría que el nombre aprobado y el escrito
+  difieran). Las rutas se resuelven **antes** de preguntar al usuario: si alguna
+  se sale, se rechaza el lote entero.
+- Los datos se escriben en `.part` y solo se renombran si el SHA-256 cuadra; si
+  no, se borran.
+- Los nombres existentes no se sobrescriben (`nota.txt` → `nota (1).txt`).
+- El alias del peer se limpia de caracteres de control y se acota a 64 chars.
+- La UI construye todo con `textContent`; nada que venga de la red pasa por
+  `innerHTML`.
+
+### Framing
+
+`[u8 tipo][u32 be longitud][carga]`. El tipo importa: el códec anterior
+adivinaba intentando parsear cada trama como JSON, lo que costaba un intento de
+parseo sobre cada megabyte de datos y podía malinterpretar binario con forma de
+comando.
+
+## Pendiente
+
+- Reanudar transferencias interrumpidas (`ResumeRequest` se quitó del protocolo
+  al no estar implementado; el `.part` ya deja la base para volver a añadirlo).
+- Cancelar una transferencia en curso desde la UI (hoy solo se puede rechazar
+  antes de empezar).
+- Cifrado. El tráfico va en claro; sirve para redes locales de confianza.
+
+## Verificación
+
 ```bash
-cargo build       → OK
-cargo build --release → OK
-cargo test        → 23 passed, 0 failed
-cargo run         → Inicia correctamente
-curl /api/send    → Upload funciona
-curl /api/files   → Listado funciona
+cargo test              # 25 tests: unitarios + e2e sobre sockets reales
+./test.sh               # dos instancias reales, 4 escenarios
+cargo build --release
 ```

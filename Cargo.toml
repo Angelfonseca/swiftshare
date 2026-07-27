@@ -5,6 +5,14 @@ edition = "2021"
 description = "Fast P2P file transfer tool for local networks"
 authors = ["swiftshare"]
 
+[lib]
+name = "swiftshare"
+path = "src/lib.rs"
+
+[[bin]]
+name = "swiftshare"
+path = "src/main.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["json", "multipart", "ws"] }
@@ -30,6 +38,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 tower = "0.5"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

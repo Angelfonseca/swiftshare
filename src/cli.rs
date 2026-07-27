@@ -27,6 +27,10 @@ pub struct Cli {
     /// HTTP port for web UI
     #[arg(long, default_value_t = 8080)]
     pub http_port: u16,
+
+    /// Open the web UI in the browser on startup
+    #[arg(long)]
+    pub open: bool,
 }
 
 impl Cli {
@@ -38,12 +42,15 @@ impl Cli {
         }
     }
 
+    /// Received files land here. Its own folder, so incoming files never get
+    /// lost among everything else in ~/Downloads.
     pub fn resolve_download_dir(&self) -> std::path::PathBuf {
         if !self.download_dir.is_empty() {
-            std::path::PathBuf::from(&self.download_dir)
-        } else {
-            dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+            return std::path::PathBuf::from(&self.download_dir);
         }
+        dirs::download_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("swiftshare")
     }
 }
 

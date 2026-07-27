@@ -1,0 +1,28 @@
+[package]
+name = "swiftshare-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "swiftshare desktop shell (window, tray, native notifications)"
+publish = false
+
+[lib]
+name = "swiftshare_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+swiftshare = { path = ".." }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+
+[[bin]]
+name = "swiftshare-desktop"
+path = "src/main.rs"

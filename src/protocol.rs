@@ -1,37 +1,44 @@
 // Protocol types for TCP file transfer
+//
+// Frame layout on the wire: [u8 kind][u32 be len][payload]
+//   kind 0 = JSON TransferCommand, kind 1 = raw file bytes.
+//
+// A session is: PrepareTransfer -> TransferResponse -> (StartFile, Data*, FileComplete)* -> SessionComplete
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransferCommand {
+    /// Sender announces the whole batch. Receiver asks the user to accept.
     PrepareTransfer {
         session_id: String,
+        peer_alias: String,
         files: Vec<FileMetadata>,
     },
+    /// Receiver's verdict, one token per accepted file.
     TransferResponse {
         session_id: String,
         accepted_files: HashMap<String, FileToken>,
     },
-    FileChunk {
+    /// All Data frames until FileComplete belong to this file.
+    StartFile {
         session_id: String,
         file_id: String,
         token: String,
-        offset: u64,
-        data_len: u32,
     },
     FileComplete {
         session_id: String,
         file_id: String,
         sha256: String,
     },
-    CancelTransfer {
+    SessionComplete {
         session_id: String,
     },
-    ResumeRequest {
+    CancelTransfer {
         session_id: String,
-        file_id: String,
-        from_offset: u64,
+        reason: String,
     },
 }
 
@@ -41,7 +48,7 @@ pub struct FileMetadata {
     pub name: String,
     pub size: u64,
     pub mime_type: String,
-    pub sha256: String,
+    /// Path relative to the dropped folder root, if this came from a folder.
     pub relative_path: Option<String>,
 }
 
@@ -54,5 +61,5 @@ pub struct FileToken {
 #[derive(Debug, Clone)]
 pub enum TransferFrame {
     Message(TransferCommand),
-    Data(Vec<u8>),
+    Data(Bytes),
 }
