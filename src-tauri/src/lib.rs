@@ -3,14 +3,58 @@
 // OS notifications driven straight off the same event stream the web UI's
 // WebSocket already uses.
 
+use std::path::Path;
+
 use clap::Parser;
+use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, WindowEvent};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 
 use swiftshare::cli::Cli;
 use swiftshare::state::{Direction, Event, TransferStatus};
+
+/// One file found under a picked folder. `std::fs::read_dir` doesn't filter
+/// dotfiles the way the browser's directory-upload/drag-drop APIs do, so
+/// picking folders through this native dialog is how hidden files (`.env`,
+/// `.git/...`) make it into a transfer.
+#[derive(Serialize)]
+struct FolderFile {
+    rel_path: String,
+    abs_path: String,
+    size: u64,
+}
+
+#[tauri::command]
+fn pick_folder_files(app: AppHandle) -> Option<Vec<FolderFile>> {
+    let root = app.dialog().file().blocking_pick_folder()?.into_path().ok()?;
+    let mut files = Vec::new();
+    collect_files(&root, &root, &mut files);
+    Some(files)
+}
+
+fn collect_files(root: &Path, dir: &Path, out: &mut Vec<FolderFile>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(root, &path, out);
+        } else if let Ok(meta) = entry.metadata() {
+            out.push(FolderFile {
+                rel_path: path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/"),
+                abs_path: path.to_string_lossy().into_owned(),
+                size: meta.len(),
+            });
+        }
+    }
+}
+
+#[tauri::command]
+fn read_file_bytes(path: String) -> Result<tauri::ipc::Response, String> {
+    std::fs::read(&path).map(tauri::ipc::Response::new).map_err(|e| e.to_string())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,12 +66,14 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // A second launch (double-clicking the app again, a second CLI
             // invocation) should surface the existing window, not start a
             // second copy competing for the same TCP/UDP ports.
             focus_main_window(app);
         }))
+        .invoke_handler(tauri::generate_handler![pick_folder_files, read_file_bytes])
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move { start_backend(handle).await });

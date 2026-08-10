@@ -633,6 +633,25 @@ async function refreshPeers() {
 /** Directory drops don't set webkitRelativePath, so carry the path ourselves. */
 const relPathOf = (file) => file._rel || file.webkitRelativePath || null;
 
+/**
+ * The browser's directory-upload and drag-drop APIs silently skip dotfiles
+ * (.env, .git/...) with no JS-level override. Inside the Tauri desktop shell
+ * we bypass them: a native folder dialog + Rust-side `read_dir` walk, which
+ * doesn't filter hidden files.
+ */
+const isTauri = () => typeof window.__TAURI__ !== "undefined";
+
+async function pickFolderNative() {
+    const entries = await window.__TAURI__.core.invoke("pick_folder_files");
+    if (!entries) return;
+    showFilePreview(entries.map((e) => ({
+        name: e.rel_path.split("/").pop(),
+        size: e.size,
+        _rel: e.rel_path,
+        _absPath: e.abs_path,
+    })));
+}
+
 async function collectEntry(entry, files) {
     if (entry.isFile) {
         const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
@@ -713,9 +732,23 @@ async function sendSelected() {
     sendBtn.disabled = true;
     sendBtn.textContent = "Esperando aprobación...";
 
+    // Native folder picks carry an absolute path instead of bytes (see
+    // pickFolderNative) so a big folder isn't read into memory just to show
+    // a preview; read it now, right before it's actually sent.
+    // ponytail: reads every file fully into memory via Promise.all — fine
+    // for typical transfers, switch to per-file streaming if huge folders
+    // (multi-GB) turn out to matter.
+    const resolvedFiles = await Promise.all(selectedFiles.map(async (f) => {
+        if (!f._absPath) return f;
+        const bytes = await window.__TAURI__.core.invoke("read_file_bytes", { path: f._absPath });
+        const file = new File([bytes], f.name);
+        file._rel = f._rel;
+        return file;
+    }));
+
     // Manifest first: the peer needs names and sizes to decide before any
     // bytes move. Field order must match the manifest order.
-    const manifest = selectedFiles.map((f) => ({
+    const manifest = resolvedFiles.map((f) => ({
         name: f.name,
         size: f.size,
         relative_path: relPathOf(f),
@@ -723,7 +756,7 @@ async function sendSelected() {
 
     const form = new FormData();
     form.append("manifest", JSON.stringify(manifest));
-    selectedFiles.forEach((f, i) => form.append(`file${i}`, f, f.name));
+    resolvedFiles.forEach((f, i) => form.append(`file${i}`, f, f.name));
 
     const url = `/api/send?target_ip=${encodeURIComponent(selectedPeer.ip)}`
         + `&target_tcp_port=${selectedPeer.tcp_port}`
@@ -811,7 +844,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     setupTabs();
 
     $("browse-btn").addEventListener("click", () => fileInput.click());
-    $("browse-folder-btn").addEventListener("click", () => folderInput.click());
+    $("browse-folder-btn").addEventListener("click", () => (isTauri() ? pickFolderNative() : folderInput.click()));
     fileInput.addEventListener("change", (e) => showFilePreview([...e.target.files]));
     folderInput.addEventListener("change", (e) => showFilePreview([...e.target.files]));
 
