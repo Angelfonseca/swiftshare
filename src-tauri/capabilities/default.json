@@ -13,6 +13,8 @@
   },
   "permissions": [
     "core:default",
-    "notification:default"
+    "notification:default",
+    "allow-pick-folder-files",
+    "allow-read-file-bytes"
   ]
 }

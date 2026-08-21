@@ -177,6 +177,30 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the pick_folder_files command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pick-folder-files",
+          "markdownDescription": "Enables the pick_folder_files command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_file_bytes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-file-bytes",
+          "markdownDescription": "Enables the read_file_bytes command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pick_folder_files command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pick-folder-files",
+          "markdownDescription": "Denies the pick_folder_files command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_file_bytes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-file-bytes",
+          "markdownDescription": "Denies the read_file_bytes command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

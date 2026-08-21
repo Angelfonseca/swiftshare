@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Capability for the main window","remote":{"urls":["http://127.0.0.1:*"]},"local":true,"windows":["main"],"webviews":["main"],"permissions":["core:default","notification:default"]}}
+{"default":{"identifier":"default","description":"Capability for the main window","remote":{"urls":["http://127.0.0.1:*"]},"local":true,"windows":["main"],"webviews":["main"],"permissions":["core:default","notification:default","allow-pick-folder-files","allow-read-file-bytes"]}}
